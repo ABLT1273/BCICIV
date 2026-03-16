@@ -4,6 +4,8 @@ mne.set_log_level('WARNING')
 from sklearn.base import BaseEstimator,TransformerMixin,ClassifierMixin
 from scipy.signal import cheby2,sosfiltfilt
 from scipy.stats import norm
+from sklearn.feature_selection import mutual_info_classif
+from mne.decoding import CSP
 
 def load_data_moabb(subject_id=1):
     try:
@@ -87,3 +89,73 @@ class PairedMIBIF(BaseEstimator, TransformerMixin):
         self.m=m
         self.n_bands=n_bands
         self.selected_indices_=[]
+
+    def fit(self, X,y):
+        mi_scores=mutual_info_classif(X,y)
+        top_k_indices=np.argsort(mi_scores)[::-1][:self.k]
+        final_indices=set(top_k_indices)
+        for idx in top_k_indices:
+            band_idx=idx//(2*self.m)
+            intra_band_idx=idx%(2*self.m)
+            pair_intra_idx=(2*self.m-1)-intra_band_idx
+            pair_idx=band_idx*(2*self.m)+pair_intra_idx
+            final_indices.add(pair_idx)
+        self.selected_indices_=sorted(list(final_indices))
+        return self
+
+    def transform(self,x):
+        return x[:, self.selected_indices_]
+
+class BinaryFBCSP_Pipline:
+    def __init__(self,m=2,k=4):
+        self.m=m
+        self.csps=[]
+        self.selector=PairedMIBIF(k=k,m=m)
+        self.clf=NBPWClassifier()
+    def fit(self,X_fb,y_binary):
+        n_bands=X_fb.shape[0]
+        self.csps=[]
+        features=[]
+        for i in range(n_bands):
+            csp=CSP(n_components=2*self.m,reg=None,log=True,norm_trace=False)
+            csp.fit(X_fb[i],y_binary)
+            self.csps.append(csp)
+            features.append(csp.transform(X_fb[i]))
+        X_csp=np.concatenate(features,axis=1)
+        X_selected=self.selector.fit_transform(X_csp,y_binary)
+        self.cls.fit(X_selected,y_binary)
+        return self
+    def predit_proba(self,X_fb):
+        n_bands=X_fb.shape[0]
+        features=[]
+        for i in range(n_bands):
+            features.append(self.csps[i])
+        X_csp=np.concatenate(features,axis=1)
+        X_selected=self.selector.transform(X_csp)
+        idx_positive=np.where(self.cls.classes_==1)[0][0]
+        return self.clf.predict_proba(X_selected)[:,idx_positive]
+class OVR_FBCSP:
+    def __init__(self,classes=[1,2,3,4],m=2,k=4):
+        self.classes.classes=classes
+        self.models={}
+        for c in self.classes:
+            self.models[c]=BinaryFBCSP_Pipline(m=m,k=k)
+    def fit(self,X,y):
+        for c in self.classes:
+            y_binary=(y==c).astype(int)
+            self.models[c].fit(X,y_binary)
+        return self
+    def predict(self,X):
+        n_samples=X.shape[1]
+        probas=np.zeros(n_samples,len(self.classes))
+        for i,c in enumerate(self.classes):
+            probas[:,i]=self.models[c].predict_proba(X)
+        best_class_indices=np.argmax(probas,axis=1)
+        return np.array(self.classes[idx] for idx in best_class_indices)
+if __name__=="__main__":
+    print("\n=== 使用 moabb 官方开源库载入数据 ===")
+    X_tr,X_te,y_tr,y_te,sfreq_moabb=load_data_moabb(subject_id=1)
+    if X_tr is not None:
+        print(f"MOABB 提取 (Subject 1) -> 训练集 Session_T: X={X_tr.shape}, y={y_tr.shape}")
+        print(f"MOABB 提取 (Subject 1) -> 测试集 Session_E: X={X_te.shape}, y={y_te.shape}")
+        fb=FilterBank()
