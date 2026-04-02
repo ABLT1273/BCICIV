@@ -1,14 +1,15 @@
 """
 在 BCI Competition IV 2a 数据集上：
 1. 读取一个被试的运动想象数据。
-2. 只保留 C3 / C4 两个与运动想象最相关的通道。
-3. 提取频域特征（mu / beta 频带功率、相对功率、左右半球差异、峰值频率）。
-4. 用 umap-learn 把特征降到 3 维。
+2. 保留 C3 / C4 的经典频域特征分支。
+3. 引入 FBCSP 分支，从全通道里提取空间滤波特征。
+4. 把两路特征拼接后，用 supervised UMAP 降到 3 维。
 5. 用 matplotlib 画 3D 散点图，不同类别用不同颜色区分。
 
 说明：
-- 这里选择“频域特征”而不是“微状态特征”，因为在 C3 / C4 这种局部运动皮层通道上，
-  mu 与 beta 频带功率是更经典、更直接的运动想象特征。
+- 这里不再只依赖 C3 / C4 的手工频域特征，而是额外引入 FBCSP。
+- FBCSP 会利用多通道空间模式，把不同任务在空间滤波域里的差异显式提取出来。
+- supervised UMAP 会把类别标签 y 也用于降维，让左手/右手/脚/舌在低维空间里更容易分开。
 - 数据读取使用 MOABB 对 BCICIV2a 的官方封装：BNCI2014_001。
 - 第一次运行时，如果本地没有缓存数据，MOABB 可能会自动下载数据集。
 
@@ -81,7 +82,7 @@ if "--show" not in os.sys.argv:
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.signal import welch
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 
 # 统一定义类别名称，后面画图和打印结果时都会复用。
@@ -100,6 +101,40 @@ LABEL_TO_COLOR = {
     "tongue": "#ff7f0e",
 }
 
+LABEL_TO_INT = {
+    "left_hand": 1,
+    "right_hand": 2,
+    "feet": 3,
+    "tongue": 4,
+}
+
+INT_TO_LABEL = {value: key for key, value in LABEL_TO_INT.items()}
+
+BNCI2014001_CHANNEL_NAMES = [
+    "FZ",
+    "FC3",
+    "FC1",
+    "FCZ",
+    "FC2",
+    "FC4",
+    "C5",
+    "C3",
+    "C1",
+    "CZ",
+    "C2",
+    "C4",
+    "C6",
+    "CP3",
+    "CP1",
+    "CPZ",
+    "CP2",
+    "CP4",
+    "P1",
+    "PZ",
+    "P2",
+    "POZ",
+]
+
 # 这里挑选最常用的运动想象频带。
 FREQUENCY_BANDS = {
     "mu": (8.0, 13.0),
@@ -111,9 +146,10 @@ def load_subject_data(
     subject_id: int = 1,
     tmin: float = 0.5,
     tmax: float = 2.5,
+    channels: list[str] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, "object", float]:
     """
-    读取一个被试的 BCICIV2a 数据，并且只提取 C3 / C4 两个通道。
+    读取一个被试的 BCICIV2a 数据。
 
     参数
     ----------
@@ -122,12 +158,15 @@ def load_subject_data(
     tmin, tmax:
         每个 trial 的时间窗，单位是秒。
         这里沿用常见做法，截取 cue 后 0.5s 到 2.5s 的运动想象片段。
+    channels:
+        指定要加载的通道列表。
+        - 传入 ["C3", "C4"] 时，只加载两个运动想象核心通道。
+        - 传入 None 时，加载范式允许的全部 EEG 通道，供 FBCSP 使用。
 
     返回
     -------
     X:
-        形状为 (n_trials, 2, n_samples) 的 EEG trial 数据。
-        第 2 个维度只包含两个通道，并且顺序固定为 [C3, C4]。
+        形状为 (n_trials, n_channels, n_samples) 的 EEG trial 数据。
     y:
         字符串标签，例如 left_hand / right_hand / feet / tongue。
     metadata:
@@ -147,12 +186,12 @@ def load_subject_data(
 
     dataset = BNCI2014_001()
 
-    # 显式指定四分类任务，并把通道直接限制到 C3 / C4。
-    # 这样后面就不需要在加载后再手动切片了。
+    # 如果 channels=None，就读取全部 EEG 通道；
+    # 如果传入具体通道列表，就只保留这些通道。
     paradigm = MotorImagery(
         events=list(LABEL_TO_DISPLAY_NAME.keys()),
         n_classes=4,
-        channels=["C3", "C4"],
+        channels=channels,
         tmin=tmin,
         tmax=tmax,
     )
@@ -306,13 +345,105 @@ def extract_c3_c4_frequency_features(
     return features, feature_names
 
 
-def reduce_features_to_3d(features: np.ndarray) -> tuple[np.ndarray, np.ndarray, "object"]:
+def select_c3_c4_from_full_channels(X_all: np.ndarray) -> np.ndarray:
+    """
+    从 BCICIV2a 的 22 通道全通道数据里切出 C3 / C4。
+
+    这里基于 BNCI2014-001 的固定通道顺序：
+    C3 位于索引 7，C4 位于索引 11。
+    为了让代码更可读，这里仍然通过通道名查索引，而不是直接写死数字。
+    """
+
+    if X_all.ndim != 3 or X_all.shape[1] != len(BNCI2014001_CHANNEL_NAMES):
+        raise ValueError(
+            "当前数据形状与 BCICIV2a 的 22 通道设置不一致，"
+            f"收到的形状是 {X_all.shape}。"
+        )
+
+    c3_index = BNCI2014001_CHANNEL_NAMES.index("C3")
+    c4_index = BNCI2014001_CHANNEL_NAMES.index("C4")
+    return X_all[:, [c3_index, c4_index], :]
+
+
+def extract_fbcsp_features(
+    X: np.ndarray,
+    labels_int: np.ndarray,
+    sfreq: float,
+    m: int = 2,
+    k: int = 4,
+) -> tuple[np.ndarray, list[str]]:
+    """
+    复用现有 FBCSP.py 的 FilterBank / PairedMIBIF 思路，从全通道里提取 FBCSP 特征。
+
+    这里不直接调用最终分类器，而是把 FBCSP 当成“监督式特征提取器”来使用：
+    1. 先把全通道 EEG 划分到多个频带。
+    2. 对每个类别做 One-Versus-Rest 的 CSP。
+    3. 在每个 OVR 分支中，用 PairedMIBIF 选出信息量最大的 CSP 特征。
+    4. 把所有 OVR 分支的被选特征拼起来，作为 FBCSP 特征矩阵。
+
+    这样做的好处是：
+    - FBCSP 能捕获多通道空间模式；
+    - C3/C4 频域特征能保留直观的局部生理解释；
+    - 两者拼接后通常比单一路径更有判别力。
+    """
+
+    try:
+        from mne.decoding import CSP
+        from FBCSP import FilterBank, PairedMIBIF
+    except ImportError as exc:
+        raise ImportError(
+            "导入 FBCSP 相关模块失败，请确认 FBCSP.py 与依赖已经可用。"
+        ) from exc
+
+    filter_bank = FilterBank(sfreq=int(sfreq))
+    X_fb = filter_bank.transform(X)
+
+    n_bands = X_fb.shape[0]
+    feature_blocks: list[np.ndarray] = []
+    feature_names: list[str] = []
+
+    for class_id in sorted(np.unique(labels_int)):
+        y_binary = (labels_int == class_id).astype(int)
+        csp_feature_per_band: list[np.ndarray] = []
+
+        for band_index in range(n_bands):
+            csp = CSP(n_components=2 * m, reg=None, log=True, norm_trace=False)
+            band_features = csp.fit_transform(X_fb[band_index], y_binary)
+            csp_feature_per_band.append(band_features)
+
+        X_csp = np.concatenate(csp_feature_per_band, axis=1)
+        selector = PairedMIBIF(k=k, m=m, n_bands=n_bands)
+        X_selected = selector.fit_transform(X_csp, y_binary)
+        feature_blocks.append(X_selected)
+
+        class_label = INT_TO_LABEL[int(class_id)]
+        for selected_index in selector.selected_indices_:
+            band_idx = selected_index // (2 * m)
+            component_idx = selected_index % (2 * m)
+            low_freq, high_freq = filter_bank.bands[band_idx]
+            feature_names.append(
+                f"fbcsp_ovr_{class_label}_{low_freq:02d}_{high_freq:02d}_csp_{component_idx}"
+            )
+
+    features = np.concatenate(feature_blocks, axis=1)
+    return features, feature_names
+
+
+def reduce_features_to_3d(
+    features: np.ndarray,
+    labels: np.ndarray,
+    supervised: bool = False,
+) -> tuple[np.ndarray, np.ndarray, "object"]:
     """
     先标准化特征，再用 UMAP 把特征压到 3 维。
 
     为什么要先标准化？
     - 因为不同特征的量纲不同，例如“对数功率”和“峰值频率”数值范围不一样。
     - 如果不标准化，UMAP 的距离计算会被大尺度特征主导。
+
+    当 supervised=True 时：
+    - UMAP 会额外利用类别标签，让低维空间更强调类间分离。
+    - 这通常会让不同运动想象类别分得更开。
     """
 
     try:
@@ -328,7 +459,7 @@ def reduce_features_to_3d(features: np.ndarray) -> tuple[np.ndarray, np.ndarray,
 
     n_neighbors = min(30, max(5, len(features_scaled) - 1))
 
-    reducer = umap.UMAP(
+    reducer_kwargs = dict(
         n_components=3,
         n_neighbors=n_neighbors,
         min_dist=0.15,
@@ -336,7 +467,17 @@ def reduce_features_to_3d(features: np.ndarray) -> tuple[np.ndarray, np.ndarray,
         random_state=42,
     )
 
-    embedding = reducer.fit_transform(features_scaled)
+    if supervised:
+        reducer_kwargs["target_metric"] = "categorical"
+        reducer_kwargs["target_weight"] = 0.35
+
+    reducer = umap.UMAP(**reducer_kwargs)
+
+    if supervised:
+        encoded_labels = LabelEncoder().fit_transform(labels)
+        embedding = reducer.fit_transform(features_scaled, y=encoded_labels)
+    else:
+        embedding = reducer.fit_transform(features_scaled)
     return embedding, features_scaled, reducer
 
 
@@ -345,6 +486,7 @@ def plot_3d_embedding(
     labels: np.ndarray,
     subject_id: int,
     save_path: Path,
+    reduction_name: str,
     show: bool = False,
 ) -> None:
     """
@@ -374,7 +516,7 @@ def plot_3d_embedding(
         )
 
     ax.set_title(
-        f"BCICIV2a Subject {subject_id}: C3/C4 frequency features -> UMAP 3D",
+        f"BCICIV2a Subject {subject_id}: C3/C4 + FBCSP -> {reduction_name} 3D",
         pad=18,
     )
     ax.set_xlabel("UMAP-1")
@@ -394,9 +536,12 @@ def plot_3d_embedding(
 def save_feature_package(
     output_dir: Path,
     subject_id: int,
+    embedding_name: str,
     raw_features: np.ndarray,
     scaled_features: np.ndarray,
     embedding: np.ndarray,
+    c3_c4_features: np.ndarray,
+    fbcsp_features: np.ndarray,
     labels: np.ndarray,
     feature_names: list[str],
     metadata: "object",
@@ -407,7 +552,7 @@ def save_feature_package(
     这样你后续如果想继续做分类、聚类、或者换别的可视化方法，就不用重复提特征。
     """
 
-    output_path = output_dir / f"subject_{subject_id:02d}_c3_c4_features_umap3d.npz"
+    output_path = output_dir / f"subject_{subject_id:02d}_hybrid_fbcsp_{embedding_name}.npz"
     sessions = (
         np.asarray(metadata["session"])
         if "session" in metadata
@@ -423,6 +568,8 @@ def save_feature_package(
         raw_features=raw_features,
         scaled_features=scaled_features,
         embedding=embedding,
+        c3_c4_features=c3_c4_features,
+        fbcsp_features=fbcsp_features,
         labels=labels,
         sessions=sessions,
         runs=runs,
@@ -435,7 +582,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     """定义命令行参数，方便你切换被试编号和输出目录。"""
 
     parser = argparse.ArgumentParser(
-        description="读取 BCICIV2a 的一个被试，提取 C3/C4 频域特征，并做 UMAP 3D 可视化。"
+        description="读取 BCICIV2a 的一个被试，融合 C3/C4 频域特征与 FBCSP 特征，并做 supervised UMAP 3D 可视化。"
     )
     parser.add_argument(
         "--subject",
@@ -454,6 +601,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="是否在保存图片后弹出图窗显示。",
     )
+    parser.add_argument(
+        "--supervised-umap",
+        action="store_true",
+        help="启用 supervised UMAP；默认关闭，此时使用普通 UMAP。",
+    )
     return parser
 
 
@@ -464,47 +616,90 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. 读取一个被试的数据。
-    print("正在读取 BCICIV2a 被试数据...", flush=True)
-    X, labels, metadata, sfreq = load_subject_data(subject_id=args.subject)
+    print("正在读取 BCICIV2a 被试的全通道数据...", flush=True)
+    X_all, labels, metadata, sfreq = load_subject_data(
+        subject_id=args.subject,
+        channels=None,
+    )
+
+    print("正在从全通道数据中提取 C3 / C4 通道...", flush=True)
+    X_c3_c4 = select_c3_c4_from_full_channels(X_all)
+
+    labels_int = np.asarray([LABEL_TO_INT[label] for label in labels])
 
     # 2. 从 C3 / C4 上提取频域特征。
     print("正在提取 C3 / C4 频域特征...", flush=True)
-    features, feature_names = extract_c3_c4_frequency_features(X, sfreq)
+    c3_c4_features, c3_c4_feature_names = extract_c3_c4_frequency_features(
+        X_c3_c4,
+        sfreq,
+    )
 
-    # 3. 用 UMAP 压到 3 维。
-    print("正在执行 UMAP 三维降维，首次运行可能会稍等几秒...", flush=True)
-    embedding, scaled_features, _ = reduce_features_to_3d(features)
+    # 3. 从全通道上提取 FBCSP 特征。
+    print("正在提取 FBCSP 空间滤波特征...", flush=True)
+    fbcsp_features, fbcsp_feature_names = extract_fbcsp_features(
+        X_all,
+        labels_int,
+        sfreq,
+    )
 
-    # 4. 保存特征和降维结果，便于后续复用。
+    # 4. 拼接两路特征，形成强化后的混合特征表示。
+    print("正在拼接 C3/C4 特征与 FBCSP 特征...", flush=True)
+    features = np.concatenate([c3_c4_features, fbcsp_features], axis=1)
+    feature_names = c3_c4_feature_names + fbcsp_feature_names
+
+    # 5. 用 supervised UMAP 压到 3 维。
+    reduction_name = "supervised UMAP" if args.supervised_umap else "UMAP"
+    print(f"正在执行 {reduction_name} 三维降维，首次运行可能会稍等几秒...", flush=True)
+    embedding, scaled_features, _ = reduce_features_to_3d(
+        features,
+        labels,
+        supervised=args.supervised_umap,
+    )
+
+    # 6. 保存特征和降维结果，便于后续复用。
     print("正在保存特征结果...", flush=True)
     feature_package_path = save_feature_package(
         output_dir=args.output_dir,
         subject_id=args.subject,
+        embedding_name=(
+            "supervised_umap3d" if args.supervised_umap else "umap3d"
+        ),
         raw_features=features,
         scaled_features=scaled_features,
         embedding=embedding,
+        c3_c4_features=c3_c4_features,
+        fbcsp_features=fbcsp_features,
         labels=labels,
         feature_names=feature_names,
         metadata=metadata,
     )
 
-    # 5. 画 3D 散点图。
+    # 7. 画 3D 散点图。
     print("正在绘制 3D 散点图...", flush=True)
-    figure_path = args.output_dir / f"subject_{args.subject:02d}_c3_c4_umap3d.png"
+    figure_stem = (
+        "subject_"
+        f"{args.subject:02d}_hybrid_fbcsp_"
+        f"{'supervised_umap3d' if args.supervised_umap else 'umap3d'}"
+    )
+    figure_path = args.output_dir / f"{figure_stem}.png"
     plot_3d_embedding(
         embedding=embedding,
         labels=labels,
         subject_id=args.subject,
         save_path=figure_path,
+        reduction_name=reduction_name,
         show=args.show,
     )
 
     # 6. 在终端打印关键结果，方便快速确认脚本有没有跑通。
     unique_labels, counts = np.unique(labels, return_counts=True)
     print(f"被试编号: {args.subject}")
-    print(f"原始 trial 数据形状: {X.shape}")
-    print(f"提取后的特征矩阵形状: {features.shape}")
-    print(f"UMAP 3D 嵌入形状: {embedding.shape}")
+    print(f"全通道原始 trial 数据形状: {X_all.shape}")
+    print(f"C3/C4 原始 trial 数据形状: {X_c3_c4.shape}")
+    print(f"C3/C4 频域特征形状: {c3_c4_features.shape}")
+    print(f"FBCSP 特征形状: {fbcsp_features.shape}")
+    print(f"融合后特征矩阵形状: {features.shape}")
+    print(f"{reduction_name} 3D 嵌入形状: {embedding.shape}")
     print("类别样本数:")
     for label, count in zip(unique_labels, counts, strict=True):
         print(f"  - {LABEL_TO_DISPLAY_NAME.get(label, label)}: {count}")
