@@ -9,7 +9,6 @@ from sklearn.base import BaseEstimator, TransformerMixin,ClassifierMixin
 from sklearn.metrics import accuracy_score, classification_report, cohen_kappa_score
 from sklearn.model_selection import RepeatedStratifiedKFold
 from scipy.stats import norm
-from data_loader import load_moabb_data
 
 class FilterBank(BaseEstimator, TransformerMixin):
     """
@@ -218,10 +217,18 @@ class OVR_FBCSP_Ensemble:
 
 # --- 模拟运行示例 ---
 if __name__ == "__main__":
+    from framework.runtime import prepare_runtime_environment
+
+    prepare_runtime_environment()
+
+    try:
+        from framework.data import load_subject_train_test
+    except ImportError as exc:
+        raise ImportError("无法从统一框架读取 BCICIV2a 数据。") from exc
+
     print(f"=== 1. 使用 MOABB 库加载规范并带有真实验证标签的 BCI 2A 数据 ===")
-    
-    # 我们可以通过传入数组来加载多个受试者的数据，例如 subject_ids=[1, 2, 3] 甚至 list(range(1, 10))
-    X_train, X_test, y_train, y_test, sfreq = load_moabb_data(subject_ids=[1])
+
+    X_train, X_test, y_train, y_test, sfreq = load_subject_train_test(subject_id=1)
     
     if X_train is not None and X_test is not None:
         print(f"数据加载完成! 训练集(Session T)维度: {X_train.shape}, 测试/评估集(Session E)维度: {X_test.shape}")
