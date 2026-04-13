@@ -1,0 +1,12 @@
+*.zip
+*.pyc
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
+*.log
+*.pid
+*.mat
+*.fif
+*.npy
+*.csv
+.runtime_cache/
