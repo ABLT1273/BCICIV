@@ -17,12 +17,18 @@ def get_result_group_dir(group_name: str) -> Path:
     return path
 
 
+def get_model_dir() -> Path:
+    path = get_script_root() / "model"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def get_hybrid_results_dir() -> Path:
-    return get_result_group_dir("hybrid_reduction")
+    return get_result_group_dir("dim_reduction_hybrid_fbcsp")
 
 
 def get_advanced_results_dir() -> Path:
-    return get_result_group_dir("advanced_benchmark")
+    return get_result_group_dir("benchmark_trca_wavelet_cnn")
 
 
 def get_results_index_path() -> Path:

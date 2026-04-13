@@ -148,7 +148,7 @@ def extract_fbcsp_features(
 
     try:
         from mne.decoding import CSP
-        from FBCSP import FilterBank, PairedMIBIF
+        from models.FBCSP import FilterBank, PairedMIBIF
     except ImportError as exc:
         raise ImportError(
             "导入 FBCSP 相关模块失败，请确认 FBCSP.py 与依赖已经可用。"

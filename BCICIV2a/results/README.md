@@ -1,35 +1,16 @@
 # BCICIV2a Results
 
-这个目录用于统一收纳 BCICIV2a 相关实验结果。
+这个目录统一收纳 BCICIV2a 相关实验结果，按范式分子目录存放。
 
-当前按范式分为两个子目录：
+## 子目录
 
-- `hybrid_reduction/`
-  说明：保存 C3/C4 频域特征、FBCSP 特征以及 UMAP 可视化结果。
-- `advanced_benchmark/`
-  说明：保存 TRCA、Wavelet、CNN 等方法的单被试结果、全被试汇总与对比图。
+- `benchmark_trca_wavelet_cnn/`
+  保存 TRCA、Wavelet、CNN 三种方法的单被试指标 JSON、对比柱状图及全被试汇总。
 
-统一框架入口：
+- `dim_reduction_hybrid_fbcsp/`
+  保存 C3/C4 频域特征、FBCSP 特征的 UMAP 降维嵌入（.npz）与 3D 可视化图。
 
-- `pre-precess.py`
-- `framework/runtime.py`
-- `framework/data.py`
-- `framework/paths.py`
-- `framework/plotting.py`
-- `framework/registry.py`
-- `paradigms/hybrid_fbcsp_umap.py`
-- `paradigms/advanced_benchmark.py`
+## 新增结果目录
 
-当前已注册范式：
-
-- `hybrid_fbcsp_umap`
-  组件：`C3/C4 frequency` + `FBCSP` + `UMAP/supervised UMAP`
-- `advanced_feature_benchmark`
-  组件：`TRCA hybrid classifier` + `PyWavelets` + `EEGNet-style CNN`
-
-后续新增范式时，建议：
-
-1. 在 `framework/registry.py` 注册新的范式说明。
-2. 复用 `framework/data.py` 的数据读取接口。
-3. 在 `paradigms/` 下新增范式模块，并提供 `build_config_from_namespace` / `run_from_config`。
-4. 将结果写入 `results/` 下对应的新子目录。
+在 `framework/registry.py` 注册新范式时，`default_result_group` 字段即为对应子目录名，
+`framework/paths.py` 中的路径函数负责在首次写入时自动创建该目录。

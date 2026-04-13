@@ -49,52 +49,52 @@ class NBPWClassifier(BaseEstimator, ClassifierMixin):
     def fit(self, X, y):
         self.classes_ = np.unique(y)
         n_samples = len(y)
-        
+
         for c in self.classes_:
             X_c = X[y == c]
             n_c = len(X_c)
             # 计算先验概率 P(w)
             self.prior_[c] = n_c / n_samples
             self.train_data_[c] = X_c
-            
+
             # 计算正态最优平滑参数 h_opt, 对应论文公式 (21)
             # h_opt = (4 / 3n)^(1/5) * sigma
             sigma = np.std(X_c, axis=0)
             # 避免标准差为0的情况
-            sigma[sigma == 0] = 1e-6 
+            sigma[sigma == 0] = 1e-6
             self.h_opt_[c] = ((4.0 / (3.0 * n_c)) ** 0.2) * sigma
-            
+
         return self
 
     def predict_proba(self, X):
         n_samples, n_features = X.shape
         probas = np.zeros((n_samples, len(self.classes_)))
-        
+
         for i, c in enumerate(self.classes_):
             X_c = self.train_data_[c]
             h_c = self.h_opt_[c]
             n_c = len(X_c)
-            
+
             # 计算 p(x|w), 对应论文公式 (18) 和 (19)
             # 假设特征条件独立，用 Parzen 窗估计边缘概率密度
             p_x_given_w = np.ones(n_samples)
             for j in range(n_features):
                 # 提取测试样本的第 j 个特征，形状 (n_samples, 1)
-                x_j = X[:, j][:, np.newaxis] 
+                x_j = X[:, j][:, np.newaxis]
                 # 提取训练样本的第 j 个特征，形状 (1, n_c)
-                x_train_j = X_c[:, j][np.newaxis, :] 
-                
+                x_train_j = X_c[:, j][np.newaxis, :]
+
                 # 计算高斯核，对应论文公式 (20)
                 diff = x_j - x_train_j
                 kernel_vals = norm.pdf(diff, loc=0, scale=h_c[j])
-                
+
                 # 对所有训练样本求平均得到概率密度估计
                 p_xj_given_w = np.sum(kernel_vals, axis=1) / n_c
                 p_x_given_w *= p_xj_given_w
-            
+
             # 乘以先验概率，得到未归一化的后验概率
             probas[:, i] = p_x_given_w * self.prior_[c]
-            
+
         # 归一化 (对应公式 16)
         row_sums = probas.sum(axis=1)[:, np.newaxis]
         row_sums[row_sums == 0] = 1e-10 # 防止除零
@@ -107,7 +107,7 @@ class NBPWClassifier(BaseEstimator, ClassifierMixin):
 
 class PairedMIBIF(BaseEstimator, TransformerMixin):
     """
-    基于互信息的最优个体特征选择 (MIBIF)，包含“成对保留”机制。
+    基于互信息的最优个体特征选择 (MIBIF)，包含"成对保留"机制。
     论文指出：如果一个特征被选中，其对应的成对特征如果未被选中也会被包含进来。
     """
     def __init__(self, k=4, m=2, n_bands=9):
@@ -119,24 +119,24 @@ class PairedMIBIF(BaseEstimator, TransformerMixin):
     def fit(self, X, y):
         # 计算所有特征的互信息 (MI)
         mi_scores = mutual_info_classif(X, y)
-        
+
         # 降序排序，选取前 k 个特征的索引
         top_k_indices = np.argsort(mi_scores)[::-1][:self.k]
-        
+
         final_indices = set(top_k_indices)
-        
+
         # 强制包含成对特征
         # 在 mne 的 CSP 中，n_components=4 时，0和3是一对，1和2是一对。
         for idx in top_k_indices:
             band_idx = idx // (2 * self.m)
             intra_band_idx = idx % (2 * self.m)
-            
+
             # 计算其成对特征的相对索引: (2*m - 1) - intra_band_idx
             pair_intra_idx = (2 * self.m - 1) - intra_band_idx
             pair_idx = band_idx * (2 * self.m) + pair_intra_idx
-            
+
             final_indices.add(pair_idx)
-            
+
         self.selected_indices_ = sorted(list(final_indices))
         return self
 
@@ -152,21 +152,21 @@ class BinaryFBCSP_Pipeline:
         self.csps = []
         self.selector = PairedMIBIF(k=k, m=m)
         self.clf = NBPWClassifier()
-        
+
     def fit(self, X_fb, y_binary):
         n_bands = X_fb.shape[0]
         self.csps = []
         features = []
-        
+
         # 1. 独立计算每个频带的 CSP
         for i in range(n_bands):
             csp = CSP(n_components=2*self.m, reg=None, log=True, norm_trace=False)
             csp.fit(X_fb[i], y_binary)
             self.csps.append(csp)
             features.append(csp.transform(X_fb[i]))
-            
+
         X_csp = np.concatenate(features, axis=1)
-        
+
         # 2. 特征选择与分类器训练
         X_selected = self.selector.fit_transform(X_csp, y_binary)
         self.clf.fit(X_selected, y_binary)
@@ -179,7 +179,7 @@ class BinaryFBCSP_Pipeline:
             features.append(self.csps[i].transform(X_fb[i]))
         X_csp = np.concatenate(features, axis=1)
         X_selected = self.selector.transform(X_csp)
-        
+
         # 返回正类 (当前类) 的概率
         # 假设 y_binary 中 1 为正类，0 为负类 (Rest)
         idx_positive = np.where(self.clf.classes_ == 1)[0][0]
@@ -195,28 +195,33 @@ class OVR_FBCSP_Ensemble:
         self.models = {}
         for c in classes:
             self.models[c] = BinaryFBCSP_Pipeline(m=m, k=k)
-            
+
     def fit(self, X_fb, y):
         for c in self.classes:
             # 构造二分类标签：当前类为 1，其余为 0
             y_binary = np.where(y == c, 1, 0)
             self.models[c].fit(X_fb, y_binary)
         return self
-        
+
     def predict(self, X_fb):
         n_samples = X_fb.shape[1]
         probas = np.zeros((n_samples, len(self.classes)))
-        
+
         # 收集每个 OVR 二分类器的正类概率
         for i, c in enumerate(self.classes):
             probas[:, i] = self.models[c].predict_proba(X_fb)
-            
+
         # 对应论文公式 (25): w = argmax p_OVR(w|x)
         best_class_indices = np.argmax(probas, axis=1)
         return np.array([self.classes[idx] for idx in best_class_indices])
 
 # --- 模拟运行示例 ---
 if __name__ == "__main__":
+    import sys
+    from pathlib import Path
+    # 确保 BCICIV2a 根目录在 sys.path，以便直接运行此脚本时能导入 framework
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
     from framework.runtime import prepare_runtime_environment
 
     prepare_runtime_environment()
@@ -228,77 +233,70 @@ if __name__ == "__main__":
 
     print(f"=== 1. 使用 MOABB 库加载规范并带有真实验证标签的 BCI 2A 数据 ===")
 
+    from framework.constants import LABEL_TO_INT
+    from framework.paths import get_model_dir
+
     X_train, X_test, y_train, y_test, sfreq = load_subject_train_test(subject_id=1)
-    
+
     if X_train is not None and X_test is not None:
+        y_train = np.array([LABEL_TO_INT[lbl] for lbl in y_train])
+        y_test  = np.array([LABEL_TO_INT[lbl] for lbl in y_test])
         print(f"数据加载完成! 训练集(Session T)维度: {X_train.shape}, 测试/评估集(Session E)维度: {X_test.shape}")
-        
+
         print("\n=== 2. 开始构建并训练 FBCSP (OVR+MIBIF+NBPW) 模型 ===")
         fb = FilterBank(sfreq=int(sfreq))
-        
-        # 1. 初始化频带划分模块并处理数据
-        # 所有类别的二分类器共用同一组频带数据，所以在外部先处理好以节省算力
+
         X_train_fb = fb.transform(X_train)
         X_test_fb = fb.transform(X_test)
-        
-        # 2. 初始化OVR模型集合
-        # 内部自动包含4组（CSP->PairedMIBIF->NBPW）
-        ovr_model=OVR_FBCSP_Ensemble(classes=[1,2,3,4],m=2,k=4)
 
-        # ---训练---
+        ovr_model=OVR_FBCSP_Ensemble(classes=[1,2,3,4],m=2,k=4)
         ovr_model.fit(X_train_fb,y_train)
         print("模型训练完成")
 
-        # ---测试---
         print("\n=== 3. 开始对官方测试集(E)进行预测及评估 ===")
 
         y_pred = ovr_model.predict(X_test_fb)
         acc = accuracy_score(y_test, y_pred)
         print(f"测试集准确率 (Accuracy): {acc * 100:.2f}%\n")
-        
+
         print("详细分类评估报告:")
         print(classification_report(y_test, y_pred, target_names=['左手(1)', '右手(2)', '双足(3)', '舌头(4)']))
 
-        # === 保存机制 ===
         model_pipeline = {
             'filter_bank': fb,
             'ovr_ensemble': ovr_model,
             'sfreq': sfreq
         }
-        save_path = "fbcsp_pretrained_moabb_A01.pkl"
+        save_path = get_model_dir() / "fbcsp_pretrained_moabb_A01.pkl"
         print(f"=== 将训练好的模型保存到 {save_path} ===")
         joblib.dump(model_pipeline, save_path)
-        print("模型保存成功！后续测试时可通过: `joblib.load('fbcsp_pretrained_moabb_A01.pkl')` 恢复。")
+        print(f"模型保存成功！后续测试时可通过: `joblib.load('{save_path}')` 恢复。")
 
         print("\n=== 4. 计算 10x10-fold Cross-Validation (用 Kappa 评估) ===")
-        # 使用 RepeatedStratifiedKFold 进行 10次 10折 分层交叉验证 (共 100 折)
         n_splits = 10
         n_repeats = 10
         rskf = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats, random_state=42)
-        
+
         kappa_scores = []
         print(f"开始执行 {n_splits} 折 {n_repeats} 次重复的交叉验证 (共 {n_splits * n_repeats} 个 Folds)...这需要一定时间计算。")
-        
-        # 预先进行 FilterBank 以节省时间，这里我们依然仅对训练集 Session T 进行 CV
+
         for fold_idx, (train_idx, val_idx) in enumerate(rskf.split(X_train, y_train)):
-            # X_train_fb 维度: (n_bands, n_trials, n_channels, n_samples)
             X_fold_train = X_train_fb[:, train_idx, :, :]
             y_fold_train = y_train[train_idx]
-            
+
             X_fold_val = X_train_fb[:, val_idx, :, :]
             y_fold_val = y_train[val_idx]
-            
-            # 使用相同参数初始化模型
+
             cv_model = OVR_FBCSP_Ensemble(classes=[1,2,3,4], m=2, k=4)
             cv_model.fit(X_fold_train, y_fold_train)
-            
+
             y_fold_pred = cv_model.predict(X_fold_val)
             kappa = cohen_kappa_score(y_fold_val, y_fold_pred)
             kappa_scores.append(kappa)
-            
+
             if (fold_idx + 1) % 10 == 0:
                 print(f"已完成 {fold_idx + 1} / {n_splits * n_repeats} 折计算...")
-                
+
         kappa_scores = np.array(kappa_scores)
         print("\n--- 10×10-Fold CV 验证结果汇总 (Session T) ---")
         print(f"最大 Kappa 值 (Maximum Kappa): {np.max(kappa_scores):.4f}")

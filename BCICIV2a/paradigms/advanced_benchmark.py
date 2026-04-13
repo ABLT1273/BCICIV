@@ -11,7 +11,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
-from deep_cnn_features import (
+from models.deep_cnn_features import (
     extract_tiny_eeg_cnn_features,
     predict_tiny_eeg_cnn,
     train_tiny_eeg_cnn,
@@ -23,8 +23,8 @@ from framework.plotting import (
     plot_aggregate_metric_bar,
     plot_metric_bar,
 )
-from trca_module import TRCAHybridClassifier
-from wavelet_features import WaveletEnergyFeatureExtractor
+from models.trca_module import TRCAHybridClassifier
+from models.wavelet_features import WaveletEnergyFeatureExtractor
 
 
 @dataclass
