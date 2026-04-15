@@ -11,7 +11,7 @@
 BCICIV2a/
 ├── framework/          基础设施层（数据、路径、运行时、绘图、注册表）
 ├── models/             模型算法包（特征提取器 + 分类器）
-├── model/              已训练模型参数（.pkl）
+├── model_param/              已训练模型参数（.pkl）
 ├── paradigms/          实验范式层（端到端流程编排）
 ├── notebooks/          Jupyter 交互演示
 ├── results/            实验输出
@@ -34,7 +34,7 @@ BCICIV2a/
 | `data.py` | 加载单被试 epoch 数据（`load_subject_epochs` / `load_subject_train_test`） |
 | `constants.py` | 标签映射、通道名等全局常量 |
 | `paths.py` | 各目录路径工具函数（`get_model_dir` / `get_results_root` 等） |
-| `plotting.py` | 3D UMAP 可视化、对比柱状图 |
+| `plotting.py` | 3D UMAP 可视化、对比柱状图、全被试聚合网格图 |
 | `registry.py` | 范式注册表，`pre-precess.py` 通过此处动态加载范式模块 |
 
 ### `models/` — 模型算法
@@ -57,13 +57,13 @@ BCICIV2a/
 .venv/bin/python models/DFBCSP.py
 ```
 
-### `model/` — 模型参数
+### `model_param/` — 模型参数
 
 存放 `joblib.dump` 保存的已训练流水线，命名规则：`{method}_pretrained_moabb_A{subject:02d}.pkl`。
 
 ```python
 import joblib
-pipeline = joblib.load("model/fbcsp_pretrained_moabb_A01.pkl")
+pipeline = joblib.load("model_param/fbcsp_pretrained_moabb_A01.pkl")
 y_pred = pipeline['ovr_ensemble'].predict(pipeline['filter_bank'].transform(X_test))
 ```
 
@@ -84,8 +84,18 @@ y_pred = pipeline['ovr_ensemble'].predict(pipeline['filter_bank'].transform(X_te
 
 | 子目录 | 对应范式 | 内容 |
 |---|---|---|
-| `benchmark_trca_wavelet_cnn/` | `advanced_feature_benchmark` | 各被试指标 JSON + 对比图 + 全被试汇总 |
+| `benchmark_trca_wavelet_cnn/` | `advanced_feature_benchmark` | 全被试 CSV + UMAP 3D 总图 + comparison bar 总图 + 全被试汇总 |
 | `dim_reduction_hybrid_fbcsp/` | `hybrid_fbcsp_umap` | UMAP 嵌入 .npz + 3D 可视化图 |
+
+`advanced_feature_benchmark` 已切换为“内存聚合再落盘”的输出管路：
+
+- 单被试 `*_umap3d.png`、`*_comparison_bar.png` 不再作为最终产物写入目录
+- `subject_xx_metrics.json` 不再输出
+- `--all-subjects` 主要产物为：
+	- `all_subjects_metrics.csv`（9 被试 x 3 方法 = 27 行）
+	- `all_subjects_umap3d_grid.png`（9 行 x 3 列）
+	- `all_subjects_comparison_bar_grid.png`（3 x 3）
+	- `all_subjects_summary.json`、`all_subjects_summary_bar.png`
 
 ---
 

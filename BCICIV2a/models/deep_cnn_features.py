@@ -10,15 +10,14 @@ from torch.utils.data import DataLoader, TensorDataset
 
 class EEGNetFeatureExtractor(nn.Module):
     """
-    一个更接近 EEGNet 思路的轻量网络。
+    一个接近 EEGNet 思路的轻量网络。
 
     结构上包含：
     1. 时间卷积：先学节律/相位相关的时间滤波器
     2. 深度可分离空间卷积：在每个时间滤波器上学习跨通道空间模式
     3. 可分离卷积块：继续压缩时序信息并生成紧凑 embedding
 
-    它不是为了追求 SOTA，而是为了：
-    - 在 CPU 上也能较快训练；
+    复现目的：
     - 给当前实验提供一个“端到端深度特征”分支；
     - 尽量贴近 EEGNet 这种 EEG 任务里常见的 inductive bias；
     - 能导出倒数第二层 embedding，用来和 TRCA / Wavelet 特征做对比。

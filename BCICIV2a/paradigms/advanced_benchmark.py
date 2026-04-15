@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -19,9 +20,9 @@ from models.deep_cnn_features import (
 from framework.data import load_subject_train_test, select_named_channels
 from framework.paths import get_advanced_results_dir
 from framework.plotting import (
-    plot_3d_embedding,
+    plot_comparison_bar_subject_grid_from_data,
     plot_aggregate_metric_bar,
-    plot_metric_bar,
+    plot_umap_subject_method_grid_from_data,
 )
 from models.trca_module import TRCAHybridClassifier
 from models.wavelet_features import WaveletEnergyFeatureExtractor
@@ -160,7 +161,7 @@ def run_subject_experiment(
     show: bool = False,
     tmin: float = 0.5,
     tmax: float = 2.5,
-) -> dict[str, dict[str, float]]:
+) -> dict[str, object]:
     print("正在读取 BCICIV2a 训练/测试数据...", flush=True)
     X_train, X_test, y_train, y_test, sfreq = load_subject_train_test(
         subject_id=subject_id,
@@ -194,29 +195,11 @@ def run_subject_experiment(
     results["CNN"] = cnn_metrics
     feature_sets["CNN"] = cnn_features
 
-    print("正在保存对比结果与可视化...", flush=True)
+    print("正在计算 UMAP 嵌入（总图内存管路）...", flush=True)
 
+    umap_embeddings: dict[str, np.ndarray] = {}
     for method_name, features in feature_sets.items():
-        embedding = reduce_for_visualization(features)
-        plot_3d_embedding(
-            embedding=embedding,
-            labels=y_test,
-            title=f"BCICIV2a Subject {subject_id}: {method_name} features",
-            save_path=output_dir / f"subject_{subject_id:02d}_{method_name.lower()}_umap3d.png",
-            show=show,
-        )
-
-    plot_metric_bar(
-        results=results,
-        save_path=output_dir / f"subject_{subject_id:02d}_comparison_bar.png",
-    )
-
-    with open(
-        output_dir / f"subject_{subject_id:02d}_metrics.json",
-        "w",
-        encoding="utf-8",
-    ) as file:
-        json.dump(results, file, ensure_ascii=False, indent=2)
+        umap_embeddings[method_name.lower()] = reduce_for_visualization(features)
 
     print("实验完成。结果摘要：", flush=True)
     for method_name, metrics in results.items():
@@ -226,7 +209,11 @@ def run_subject_experiment(
             flush=True,
         )
 
-    return results
+    return {
+        "results": results,
+        "umap_embeddings": umap_embeddings,
+        "labels": y_test,
+    }
 
 
 def summarize_all_subjects(
@@ -254,6 +241,42 @@ def summarize_all_subjects(
     return summary
 
 
+def export_all_subjects_metrics_csv(
+    all_results: dict[str, dict[str, dict[str, float]]],
+    save_path: Path,
+) -> None:
+    """将所有被试、所有方法的指标保存为长表 CSV。"""
+
+    fieldnames = [
+        "subject_id",
+        "method",
+        "accuracy",
+        "kappa",
+        "best_val_accuracy",
+    ]
+
+    rows: list[dict[str, object]] = []
+    for subject_key, subject_result in all_results.items():
+        subject_id = int(subject_key.split("_")[-1])
+        for method_name, metrics in subject_result.items():
+            rows.append(
+                {
+                    "subject_id": subject_id,
+                    "method": method_name,
+                    "accuracy": metrics["accuracy"],
+                    "kappa": metrics["kappa"],
+                    "best_val_accuracy": metrics.get("best_val_accuracy", ""),
+                }
+            )
+
+    rows.sort(key=lambda item: (int(item["subject_id"]), str(item["method"])))
+
+    with open(save_path, "w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def build_config_from_namespace(args: object) -> AdvancedBenchmarkConfig:
     """把统一 CLI 参数转成当前范式的配置对象。"""
 
@@ -274,16 +297,26 @@ def run_from_config(config: AdvancedBenchmarkConfig) -> dict[str, object]:
 
     subject_ids = list(range(1, 10)) if config.all_subjects else [config.subject_id]
     all_results: dict[str, dict[str, dict[str, float]]] = {}
+    embeddings_by_subject: dict[int, dict[str, np.ndarray]] = {}
+    labels_by_subject: dict[int, np.ndarray] = {}
 
     for subject_id in subject_ids:
         print(f"\n===== 开始处理被试 {subject_id} =====", flush=True)
-        all_results[f"subject_{subject_id:02d}"] = run_subject_experiment(
+        subject_output = run_subject_experiment(
             subject_id=subject_id,
             output_dir=output_dir,
             show=config.show if len(subject_ids) == 1 else False,
             tmin=config.tmin,
             tmax=config.tmax,
         )
+        all_results[f"subject_{subject_id:02d}"] = subject_output["results"]
+        embeddings_by_subject[subject_id] = subject_output["umap_embeddings"]
+        labels_by_subject[subject_id] = np.asarray(subject_output["labels"])
+
+    export_all_subjects_metrics_csv(
+        all_results=all_results,
+        save_path=output_dir / "all_subjects_metrics.csv",
+    )
 
     summary = None
     if config.all_subjects:
@@ -306,6 +339,45 @@ def run_from_config(config: AdvancedBenchmarkConfig) -> dict[str, object]:
         plot_aggregate_metric_bar(
             summary_results=summary,
             save_path=output_dir / "all_subjects_summary_bar.png",
+        )
+
+        plot_umap_subject_method_grid_from_data(
+            save_path=output_dir / "all_subjects_umap3d_grid.png",
+            subject_ids=subject_ids,
+            method_names=["trca", "wavelet", "cnn"],
+            embeddings_by_subject=embeddings_by_subject,
+            labels_by_subject=labels_by_subject,
+            method_display_names=["TRCA", "Wavelet", "CNN"],
+        )
+
+        plot_comparison_bar_subject_grid_from_data(
+            save_path=output_dir / "all_subjects_comparison_bar_grid.png",
+            subject_ids=subject_ids,
+            results_by_subject={
+                subject_id: all_results[f"subject_{subject_id:02d}"]
+                for subject_id in subject_ids
+            },
+            n_rows=3,
+            n_cols=3,
+        )
+
+    if not config.all_subjects:
+        subject_id = subject_ids[0]
+        plot_umap_subject_method_grid_from_data(
+            save_path=output_dir / f"subject_{subject_id:02d}_umap3d_grid.png",
+            subject_ids=[subject_id],
+            method_names=["trca", "wavelet", "cnn"],
+            embeddings_by_subject={subject_id: embeddings_by_subject[subject_id]},
+            labels_by_subject={subject_id: labels_by_subject[subject_id]},
+            method_display_names=["TRCA", "Wavelet", "CNN"],
+        )
+
+        plot_comparison_bar_subject_grid_from_data(
+            save_path=output_dir / f"subject_{subject_id:02d}_comparison_bar_grid.png",
+            subject_ids=[subject_id],
+            results_by_subject={subject_id: all_results[f"subject_{subject_id:02d}"]},
+            n_rows=1,
+            n_cols=1,
         )
 
         print("\n全部被试平均结果：", flush=True)
