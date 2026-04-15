@@ -1,4 +1,4 @@
-# BCICIV2a 实验目录
+# BCICIV 实验目录（BCICIV2a）
 
 基于 [MOABB](https://github.com/NeuroTechX/moabb) 加载 BCI Competition IV 2a 数据集（BNCI2014_001），
 实现并对比多种运动想象 EEG 特征提取与分类方法。
@@ -8,17 +8,20 @@
 ## 目录结构
 
 ```
-BCICIV2a/
-├── framework/          基础设施层（数据、路径、运行时、绘图、注册表）
-├── models/             模型算法包（特征提取器 + 分类器）
-├── model_param/              已训练模型参数（.pkl）
-├── paradigms/          实验范式层（端到端流程编排）
-├── notebooks/          Jupyter 交互演示
-├── results/            实验输出
-│   ├── benchmark_trca_wavelet_cnn/
-│   └── dim_reduction_hybrid_fbcsp/
-└── pre-precess.py      统一实验入口
+BCICIV/
+└── BCICIV2a/
+	├── framework/      基础设施层（数据、路径、运行时、绘图、注册表）
+	├── models/         模型算法包（特征提取器 + 分类器）
+	├── model_param/    已训练模型参数（.pkl）
+	├── paradigms/      实验范式层（端到端流程编排）
+	├── notebooks/      Jupyter 交互演示
+	├── results/        实验输出
+	│   ├── benchmark_trca_wavelet_cnn/
+	│   └── dim_reduction_hybrid_fbcsp/
+	└── pre-precess.py  统一实验入口
 ```
+
+以下层级说明中的相对路径均以 `BCICIV2a/` 作为实验根目录。
 
 ---
 
@@ -53,8 +56,8 @@ BCICIV2a/
 
 ```bash
 # 从 BCICIV2a/ 目录执行
-.venv/bin/python models/FBCSP.py
-.venv/bin/python models/DFBCSP.py
+../../.venv/bin/python models/FBCSP.py
+../../.venv/bin/python models/DFBCSP.py
 ```
 
 ### `model_param/` — 模型参数
