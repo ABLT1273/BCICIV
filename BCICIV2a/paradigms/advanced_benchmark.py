@@ -36,6 +36,12 @@ class AdvancedBenchmarkConfig:
     show: bool = False
     tmin: float = 0.5
     tmax: float = 2.5
+    # 模型选择（为了避免默认全量耗时过长）
+    enabled_models: list[str] | None = None  # None=所有模型; 或指定列表如["TRCA", "Wavelet", "CNN"]
+    
+    def __post_init__(self):
+        if self.enabled_models is None:
+            self.enabled_models = ["TRCA", "Wavelet", "CNN", "TCN", "ATCNet", "DRSN", "LaBraM"]
 
 
 def reduce_for_visualization(features: np.ndarray) -> np.ndarray:
@@ -153,6 +159,76 @@ def run_cnn_experiment(
     }
     print(classification_report(y_test, predictions), flush=True)
     return metrics, deep_features
+
+
+def run_tcn_experiment(
+    X_train: np.ndarray,
+    X_test: np.ndarray,
+    y_train: np.ndarray,
+    y_test: np.ndarray,
+) -> tuple[dict[str, float], np.ndarray]:
+    """
+    TCN (Temporal Convolutional Network) 实验。
+    
+    返回: (metrics_dict, features_array)
+      - metrics_dict: {"accuracy": float, "kappa": float}
+      - features_array: (n_test, embedding_dim) 用于 UMAP 可视化
+    """
+    # Placeholder: 将在阶段二实现
+    raise NotImplementedError("TCN 实验尚未实现")
+
+
+def run_atcnet_experiment(
+    X_train: np.ndarray,
+    X_test: np.ndarray,
+    y_train: np.ndarray,
+    y_test: np.ndarray,
+) -> tuple[dict[str, float], np.ndarray]:
+    """
+    ATCNet (Attention Temporal Convolutional Network) 实验。
+    
+    返回: (metrics_dict, features_array)
+      - metrics_dict: {"accuracy": float, "kappa": float}
+      - features_array: (n_test, embedding_dim) 用于 UMAP 可视化
+    """
+    # Placeholder: 将在阶段二实现
+    raise NotImplementedError("ATCNet 实验尚未实现")
+
+
+def run_drsn_experiment(
+    X_train: np.ndarray,
+    X_test: np.ndarray,
+    y_train: np.ndarray,
+    y_test: np.ndarray,
+) -> tuple[dict[str, float], np.ndarray]:
+    """
+    DRSN (Deep Residual Shrinkage Network) 实验。
+    
+    返回: (metrics_dict, features_array)
+      - metrics_dict: {"accuracy": float, "kappa": float}
+      - features_array: (n_test, embedding_dim) 用于 UMAP 可视化
+    """
+    # Placeholder: 将在阶段二实现
+    raise NotImplementedError("DRSN 实验尚未实现")
+
+
+def run_labram_experiment(
+    X_train: np.ndarray,
+    X_test: np.ndarray,
+    y_train: np.ndarray,
+    y_test: np.ndarray,
+) -> tuple[dict[str, float], np.ndarray]:
+    """
+    LaBraM-Large (via TorchEEG) 实验。
+    
+    返回: (metrics_dict, features_array)
+      - metrics_dict: {"accuracy": float, "kappa": float}
+      - features_array: (n_test, embedding_dim) 用于 UMAP 可视化
+    
+    注意：此阶段仅构建管线框架，验证前向传播可行，不执行训练。
+    """
+    # Placeholder: 将在阶段二实现
+    raise NotImplementedError("LaBraM 实验尚未实现")
 
 
 def run_subject_experiment(

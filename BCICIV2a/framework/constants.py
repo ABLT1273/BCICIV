@@ -48,3 +48,16 @@ BNCI2014001_CHANNEL_NAMES = [
     "POZ",
 ]
 
+# Model method ordering and display names
+METHOD_ORDER = ["TRCA", "Wavelet", "CNN", "TCN", "ATCNet", "DRSN", "LaBraM"]
+
+METHOD_TO_DISPLAY_NAME = {
+    "TRCA": "TRCA",
+    "Wavelet": "Wavelet",
+    "CNN": "EEGNet CNN",
+    "TCN": "TCN",
+    "ATCNet": "ATCNet",
+    "DRSN": "DRSN",
+    "LaBraM": "LaBraM-Large",
+}
+

@@ -49,6 +49,24 @@ PARADIGM_REGISTRY = {
         entry_script="pre-precess.py",
         module="paradigms.advanced_benchmark",
     ),
+    "nn_models_benchmark": ParadigmSpec(
+        key="nn_models_benchmark",
+        display_name="Neural Network Models Benchmark (TCN / ATCNet / DRSN / LaBraM)",
+        description="统一基准测试四个深度学习模型。",
+        components=(
+            "framework.runtime.prepare_runtime_environment",
+            "framework.data.load_subject_train_test",
+            "TCN temporal convolutional network",
+            "ATCNet attention temporal convolutional network",
+            "DRSN dilated residual spatial network",
+            "LaBraM transformer-based EEG model",
+            "framework.plotting.plot_metric_bar",
+            "framework.plotting.plot_aggregate_metric_bar",
+        ),
+        default_result_group="benchmark_nn_models",
+        entry_script="pre-precess.py",
+        module="paradigms.nn_models_benchmark",
+    ),
 }
 
 
