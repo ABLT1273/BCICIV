@@ -7,10 +7,12 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
+from framework.devices import resolve_torch_device
+
 
 class EEGNetFeatureExtractor(nn.Module):
     """
-    一个接近 EEGNet 思路的轻量网络。
+    一个 EEGNet 思路的轻量网络。
 
     结构上包含：
     1. 时间卷积：先学节律/相位相关的时间滤波器
@@ -147,7 +149,7 @@ def train_tiny_eeg_cnn(
     early_stop_patience: int = 4,
     device: str | None = None,
 ) -> DeepFeatureResult:
-    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    device = resolve_torch_device(device)
 
     label_values = np.unique(y_train)
     label_to_index = {label: index for index, label in enumerate(label_values)}
@@ -236,7 +238,7 @@ def predict_tiny_eeg_cnn(
     X: np.ndarray,
     device: str | None = None,
 ) -> np.ndarray:
-    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    device = resolve_torch_device(device)
     X_norm, _, _ = _normalize_eeg(X, result.train_mean, result.train_std)
 
     result.model.eval()
@@ -252,7 +254,7 @@ def extract_tiny_eeg_cnn_features(
     X: np.ndarray,
     device: str | None = None,
 ) -> np.ndarray:
-    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    device = resolve_torch_device(device)
     X_norm, _, _ = _normalize_eeg(X, result.train_mean, result.train_std)
 
     result.model.eval()

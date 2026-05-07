@@ -47,7 +47,11 @@ def plot_3d_embedding(
     plt.close(fig)
 
 
-def plot_metric_bar(results: dict[str, dict[str, float]], save_path: Path) -> None:
+def plot_metric_bar(
+    results: dict[str, dict[str, float]],
+    save_path: Path,
+    title: str = "BCICIV2a Feature Experiments",
+) -> None:
     methods = list(results.keys())
     accuracies = [results[name]["accuracy"] for name in methods]
     kappas = [results[name]["kappa"] for name in methods]
@@ -62,7 +66,7 @@ def plot_metric_bar(results: dict[str, dict[str, float]], save_path: Path) -> No
     ax.set_xticklabels(methods)
     ax.set_ylim(0.0, 1.0)
     ax.set_ylabel("Score")
-    ax.set_title("BCICIV2a Feature Experiments")
+    ax.set_title(title)
     ax.legend()
     plt.tight_layout()
     fig.savefig(save_path, dpi=300, bbox_inches="tight")
@@ -75,20 +79,97 @@ def plot_aggregate_metric_bar(
 ) -> None:
     methods = list(summary_results.keys())
     accuracies = [summary_results[name]["accuracy_mean"] for name in methods]
+    balanced_accuracies = [summary_results[name].get("balanced_accuracy_mean", float("nan")) for name in methods]
     kappas = [summary_results[name]["kappa_mean"] for name in methods]
 
     x = np.arange(len(methods))
-    width = 0.35
+    width = 0.25
 
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.bar(x - width / 2, accuracies, width, label="Mean Accuracy")
-    ax.bar(x + width / 2, kappas, width, label="Mean Kappa")
+    ax.bar(x - width, accuracies, width, label="Mean Accuracy")
+    ax.bar(x, balanced_accuracies, width, label="Mean Balanced Accuracy")
+    ax.bar(x + width, kappas, width, label="Mean Kappa")
     ax.set_xticks(x)
     ax.set_xticklabels(methods)
     ax.set_ylim(0.0, 1.0)
     ax.set_ylabel("Score")
     ax.set_title("BCICIV2a All-Subject Average Results")
     ax.legend()
+    plt.tight_layout()
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_confusion_matrix(
+    cm: np.ndarray,
+    class_names: list[str],
+    save_path: Path,
+    title: str = "Confusion Matrix",
+) -> None:
+    fig, ax = plt.subplots(figsize=(6, 5))
+    im = ax.matshow(cm, cmap="Blues", vmin=0)
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    ax.set_xticks(range(len(class_names)))
+    ax.set_xticklabels(class_names, rotation=45, ha="left")
+    ax.set_yticks(range(len(class_names)))
+    ax.set_yticklabels(class_names)
+
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            ax.text(j, i, str(cm[i, j]), ha="center", va="center", fontsize=10)
+
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("True")
+    ax.set_title(title)
+    plt.tight_layout()
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_confusion_matrix_grid_from_data(
+    save_path: Path,
+    subject_ids: list[int],
+    method_names: list[str],
+    confusion_matrices_by_subject: dict[int, dict[str, np.ndarray]],
+    class_names: list[str],
+    method_display_names: list[str] | None = None,
+    n_rows: int = 3,
+    n_cols: int = 3,
+) -> None:
+    if method_display_names is None:
+        method_display_names = method_names
+
+    # 按被试排列：每行一个被试，每列一个方法
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5.5 * n_cols, 4.5 * n_rows))
+    axes = np.atleast_2d(axes)
+
+    for index, subject_id in enumerate(subject_ids):
+        row = index // n_cols
+        col = index % n_cols
+        ax = axes[row, col]
+        cms = confusion_matrices_by_subject.get(subject_id, {})
+        # Show the first method's confusion matrix for simplicity in grid
+        cm = cms.get(method_names[0], np.zeros((len(class_names), len(class_names))))
+        im = ax.matshow(cm, cmap="Blues", vmin=0)
+
+        for i in range(cm.shape[0]):
+            for j in range(cm.shape[1]):
+                ax.text(j, i, str(int(cm[i, j])), ha="center", va="center", fontsize=7)
+
+        ax.set_xticks(range(len(class_names)))
+        ax.set_xticklabels(class_names, rotation=45, ha="left", fontsize=7)
+        ax.set_yticks(range(len(class_names)))
+        ax.set_yticklabels(class_names, fontsize=7)
+        ax.set_xlabel("Predicted", fontsize=8)
+        ax.set_ylabel("True", fontsize=8)
+        ax.set_title(f"Subject {subject_id}", fontsize=10)
+
+    for idx in range(len(subject_ids), n_rows * n_cols):
+        row = idx // n_cols
+        col = idx % n_cols
+        axes[row, col].axis("off")
+
     plt.tight_layout()
     fig.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.close(fig)

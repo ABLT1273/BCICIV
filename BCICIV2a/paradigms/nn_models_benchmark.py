@@ -17,6 +17,7 @@ Pipeline:
 
 from __future__ import annotations
 
+import csv
 import json
 import logging
 from dataclasses import dataclass
@@ -24,6 +25,14 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+from framework.data import load_subject_train_test
+from framework.paths import get_model_param_dir, get_result_group_dir
+from framework.plotting import (
+    plot_aggregate_metric_bar,
+    plot_comparison_bar_subject_grid_from_data,
+    plot_metric_bar,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -39,8 +48,123 @@ class ModelMetrics:
     model_name: str
     accuracy: float
     kappa: float
+    balanced_accuracy: float = 0.0
+    confusion_matrix: list[list[int]] | None = None
     train_time: float = 0.0
     inference_time: float = 0.0
+    checkpoint_path: str | None = None
+
+
+@dataclass
+class NNModelsBenchmarkConfig:
+    subject_id: int = 1
+    output_dir: Path | None = None
+    all_subjects: bool = False
+    show: bool = False
+    tmin: float = 0.5
+    tmax: float = 2.5
+    shuffle_labels: bool = False
+
+
+def _model_metrics_to_dict(metrics_list: list[ModelMetrics]) -> dict[str, dict[str, float]]:
+    """Convert list of ModelMetrics to dict format compatible with plotting functions."""
+    result: dict[str, dict[str, float]] = {}
+    for m in metrics_list:
+        result[m.model_name] = {
+            "accuracy": m.accuracy,
+            "kappa": m.kappa,
+            "balanced_accuracy": m.balanced_accuracy,
+            "train_time": m.train_time,
+            "inference_time": m.inference_time,
+        }
+    return result
+
+
+def summarize_all_subjects(
+    all_results: dict[str, dict[str, dict[str, float]]],
+) -> dict[str, dict[str, float]]:
+    """Compute mean ± std for accuracy, kappa across all subjects per model."""
+    if not all_results:
+        return {}
+    summary: dict[str, dict[str, float]] = {}
+    method_names = next(iter(all_results.values())).keys()
+
+    for method_name in method_names:
+        accuracies = np.asarray(
+            [subject_result[method_name]["accuracy"] for subject_result in all_results.values()],
+            dtype=np.float64,
+        )
+        balanced_accuracies = np.asarray(
+            [subject_result[method_name].get("balanced_accuracy", 0.0) for subject_result in all_results.values()],
+            dtype=np.float64,
+        )
+        kappas = np.asarray(
+            [subject_result[method_name]["kappa"] for subject_result in all_results.values()],
+            dtype=np.float64,
+        )
+        summary[method_name] = {
+            "accuracy_mean": float(np.mean(accuracies)),
+            "accuracy_std": float(np.std(accuracies)),
+            "balanced_accuracy_mean": float(np.mean(balanced_accuracies)),
+            "balanced_accuracy_std": float(np.std(balanced_accuracies)),
+            "kappa_mean": float(np.mean(kappas)),
+            "kappa_std": float(np.std(kappas)),
+        }
+
+    return summary
+
+
+def export_all_subjects_metrics_csv(
+    all_results: dict[str, dict[str, dict[str, float]]],
+    save_path: Path,
+) -> None:
+    """将全部被试、全部模型的指标保存为长表 CSV。"""
+    fieldnames = [
+        "subject_id",
+        "model",
+        "accuracy",
+        "balanced_accuracy",
+        "kappa",
+        "train_time",
+        "inference_time",
+    ]
+
+    rows: list[dict[str, object]] = []
+    for subject_key, subject_result in all_results.items():
+        # subject_key format: "subject_01"
+        subject_id = int(subject_key.split("_")[1])
+        for model_name, metrics in subject_result.items():
+            rows.append(
+                {
+                    "subject_id": subject_id,
+                    "model": model_name,
+                    "accuracy": metrics["accuracy"],
+                    "balanced_accuracy": metrics.get("balanced_accuracy", 0.0),
+                    "kappa": metrics["kappa"],
+                    "train_time": metrics.get("train_time", 0.0),
+                    "inference_time": metrics.get("inference_time", 0.0),
+                }
+            )
+
+    rows.sort(key=lambda item: (int(item["subject_id"]), str(item["model"])))
+
+    with open(save_path, "w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def build_config_from_namespace(args: object) -> NNModelsBenchmarkConfig:
+    """把统一 CLI 参数转成当前范式的配置对象。"""
+
+    output_dir = args.output_dir if args.output_dir is not None else get_result_group_dir("benchmark_nn_models")
+    return NNModelsBenchmarkConfig(
+        subject_id=args.subject,
+        output_dir=output_dir,
+        all_subjects=args.all_subjects,
+        show=args.show,
+        shuffle_labels=getattr(args, "shuffle_labels", False),
+    )
 
 
 def compute_accuracy_kappa(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, float]:
@@ -70,7 +194,13 @@ def compute_accuracy_kappa(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[floa
     return float(accuracy), float(kappa)
 
 
-def run_tcn_benchmark(X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray) -> ModelMetrics:
+def run_tcn_benchmark(
+    X_train: np.ndarray,
+    X_test: np.ndarray,
+    y_train: np.ndarray,
+    y_test: np.ndarray,
+    checkpoint_dir: Path | None = None,
+) -> ModelMetrics:
     """
     Run TCN model benchmark.
     
@@ -86,16 +216,26 @@ def run_tcn_benchmark(X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarr
         from models.tcn_model import setup_tcn_pipeline, run_tcn_experiment
         
         logger.info("TCN: Running experiment...")
-        metrics_dict, _ = run_tcn_experiment(X_train, X_test, y_train, y_test)
+        metrics_dict, _ = run_tcn_experiment(
+            X_train,
+            X_test,
+            y_train,
+            y_test,
+            checkpoint_dir=checkpoint_dir,
+        )
         
         return ModelMetrics(
             model_name="TCN",
             accuracy=metrics_dict.get("accuracy", 0.0),
             kappa=metrics_dict.get("kappa", 0.0),
+            balanced_accuracy=metrics_dict.get("balanced_accuracy", 0.0),
+            confusion_matrix=metrics_dict.get("confusion_matrix", None),
+            train_time=metrics_dict.get("train_time", 0.0),
+            inference_time=metrics_dict.get("inference_time", 0.0),
+            checkpoint_path=metrics_dict.get("checkpoint_path", None),
         )
     except Exception as e:
         logger.error(f"TCN benchmark failed: {e}")
-        # Return dummy metrics
         return ModelMetrics(
             model_name="TCN",
             accuracy=0.0,
@@ -103,7 +243,13 @@ def run_tcn_benchmark(X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarr
         )
 
 
-def run_atcnet_benchmark(X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray) -> ModelMetrics:
+def run_atcnet_benchmark(
+    X_train: np.ndarray,
+    X_test: np.ndarray,
+    y_train: np.ndarray,
+    y_test: np.ndarray,
+    checkpoint_dir: Path | None = None,
+) -> ModelMetrics:
     """
     Run ATCNet model benchmark.
     
@@ -119,16 +265,26 @@ def run_atcnet_benchmark(X_train: np.ndarray, X_test: np.ndarray, y_train: np.nd
         from models.atcnet_model import setup_atcnet_pipeline, run_atcnet_experiment
         
         logger.info("ATCNet: Running experiment...")
-        metrics_dict, _ = run_atcnet_experiment(X_train, X_test, y_train, y_test)
+        metrics_dict, _ = run_atcnet_experiment(
+            X_train,
+            X_test,
+            y_train,
+            y_test,
+            checkpoint_dir=checkpoint_dir,
+        )
         
         return ModelMetrics(
             model_name="ATCNet",
             accuracy=metrics_dict.get("accuracy", 0.0),
             kappa=metrics_dict.get("kappa", 0.0),
+            balanced_accuracy=metrics_dict.get("balanced_accuracy", 0.0),
+            confusion_matrix=metrics_dict.get("confusion_matrix", None),
+            train_time=metrics_dict.get("train_time", 0.0),
+            inference_time=metrics_dict.get("inference_time", 0.0),
+            checkpoint_path=metrics_dict.get("checkpoint_path", None),
         )
     except Exception as e:
         logger.error(f"ATCNet benchmark failed: {e}")
-        # Return dummy metrics
         return ModelMetrics(
             model_name="ATCNet",
             accuracy=0.0,
@@ -136,7 +292,13 @@ def run_atcnet_benchmark(X_train: np.ndarray, X_test: np.ndarray, y_train: np.nd
         )
 
 
-def run_drsn_benchmark(X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray) -> ModelMetrics:
+def run_drsn_benchmark(
+    X_train: np.ndarray,
+    X_test: np.ndarray,
+    y_train: np.ndarray,
+    y_test: np.ndarray,
+    checkpoint_dir: Path | None = None,
+) -> ModelMetrics:
     """
     Run DRSN model benchmark.
     
@@ -152,16 +314,26 @@ def run_drsn_benchmark(X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndar
         from models.drsn_model import setup_drsn_pipeline, run_drsn_experiment
         
         logger.info("DRSN: Running experiment...")
-        metrics_dict, _ = run_drsn_experiment(X_train, X_test, y_train, y_test)
+        metrics_dict, _ = run_drsn_experiment(
+            X_train,
+            X_test,
+            y_train,
+            y_test,
+            checkpoint_dir=checkpoint_dir,
+        )
         
         return ModelMetrics(
             model_name="DRSN",
             accuracy=metrics_dict.get("accuracy", 0.0),
             kappa=metrics_dict.get("kappa", 0.0),
+            balanced_accuracy=metrics_dict.get("balanced_accuracy", 0.0),
+            confusion_matrix=metrics_dict.get("confusion_matrix", None),
+            train_time=metrics_dict.get("train_time", 0.0),
+            inference_time=metrics_dict.get("inference_time", 0.0),
+            checkpoint_path=metrics_dict.get("checkpoint_path", None),
         )
     except Exception as e:
         logger.error(f"DRSN benchmark failed: {e}")
-        # Return dummy metrics
         return ModelMetrics(
             model_name="DRSN",
             accuracy=0.0,
@@ -169,7 +341,13 @@ def run_drsn_benchmark(X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndar
         )
 
 
-def run_labram_benchmark(X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray) -> ModelMetrics:
+def run_labram_benchmark(
+    X_train: np.ndarray,
+    X_test: np.ndarray,
+    y_train: np.ndarray,
+    y_test: np.ndarray,
+    checkpoint_dir: Path | None = None,
+) -> ModelMetrics:
     """
     Run LaBraM model benchmark.
     
@@ -185,16 +363,20 @@ def run_labram_benchmark(X_train: np.ndarray, X_test: np.ndarray, y_train: np.nd
         from models.labram_adapter import setup_labram_pipeline, run_labram_experiment
         
         logger.info("LaBraM: Running experiment...")
-        metrics_dict, _ = run_labram_experiment(X_train, X_test, y_train, y_test)
+        metrics_dict, _ = run_labram_experiment(X_train, X_test, y_train, y_test, checkpoint_dir=checkpoint_dir)
         
         return ModelMetrics(
             model_name="LaBraM",
             accuracy=metrics_dict.get("accuracy", 0.0),
             kappa=metrics_dict.get("kappa", 0.0),
+            balanced_accuracy=metrics_dict.get("balanced_accuracy", 0.0),
+            confusion_matrix=metrics_dict.get("confusion_matrix", None),
+            train_time=metrics_dict.get("train_time", 0.0),
+            inference_time=metrics_dict.get("inference_time", 0.0),
+            checkpoint_path=metrics_dict.get("checkpoint_path", None),
         )
     except Exception as e:
         logger.error(f"LaBraM benchmark failed: {e}")
-        # Return dummy metrics
         return ModelMetrics(
             model_name="LaBraM",
             accuracy=0.0,
@@ -208,6 +390,7 @@ def run_all_models_benchmark(
     y_train: np.ndarray,
     y_test: np.ndarray,
     subject_id: int | None = None,
+    checkpoint_root: Path | None = None,
 ) -> list[ModelMetrics]:
     """
     Run all four models on the same subject data.
@@ -233,7 +416,17 @@ def run_all_models_benchmark(
     ]:
         logger.info(f"Running {model_name} benchmark...")
         try:
-            metrics = model_func(X_train, X_test, y_train, y_test)
+            checkpoint_dir = None
+            if checkpoint_root is not None:
+                checkpoint_dir = checkpoint_root / model_name.lower()
+            if model_name == "TCN":
+                metrics = run_tcn_benchmark(X_train, X_test, y_train, y_test, checkpoint_dir=checkpoint_dir)
+            elif model_name == "ATCNet":
+                metrics = run_atcnet_benchmark(X_train, X_test, y_train, y_test, checkpoint_dir=checkpoint_dir)
+            elif model_name == "DRSN":
+                metrics = run_drsn_benchmark(X_train, X_test, y_train, y_test, checkpoint_dir=checkpoint_dir)
+            else:
+                metrics = model_func(X_train, X_test, y_train, y_test, checkpoint_dir=checkpoint_dir)
             results.append(metrics)
             logger.info(f"{model_name}: Accuracy={metrics.accuracy:.4f}, Kappa={metrics.kappa:.4f}")
         except Exception as e:
@@ -265,9 +458,12 @@ def save_benchmark_results(
             {
                 "name": m.model_name,
                 "accuracy": m.accuracy,
+                "balanced_accuracy": m.balanced_accuracy,
                 "kappa": m.kappa,
+                "confusion_matrix": m.confusion_matrix,
                 "train_time": m.train_time,
                 "inference_time": m.inference_time,
+                "checkpoint_path": m.checkpoint_path,
             }
             for m in results
         ],
@@ -331,7 +527,9 @@ def run_paradigm(
             {
                 "model_name": r.model_name,
                 "accuracy": r.accuracy,
+                "balanced_accuracy": r.balanced_accuracy,
                 "kappa": r.kappa,
+                "confusion_matrix": r.confusion_matrix,
             }
             for r in results
         ],
@@ -343,3 +541,122 @@ def run_paradigm(
     logger.info(f"  Best Model: {summary['best_model']} ({summary['best_accuracy']:.4f})")
     
     return summary
+
+
+def run_from_config(config: NNModelsBenchmarkConfig) -> dict[str, object]:
+    """执行四模型基准并按被试保存结果。"""
+
+    output_dir = config.output_dir or get_result_group_dir("benchmark_nn_models")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    subject_ids = list(range(1, 10)) if config.all_subjects else [config.subject_id]
+    all_results: dict[str, list[ModelMetrics]] = {}
+
+    for subject_id in subject_ids:
+        logger.info("Loading subject %s train/test split...", subject_id)
+        X_train, X_test, y_train, y_test, _ = load_subject_train_test(
+            subject_id=subject_id,
+            tmin=config.tmin,
+            tmax=config.tmax,
+            channels=None,
+        )
+
+        if config.shuffle_labels:
+            rng = np.random.default_rng(42)
+            y_train = rng.permutation(y_train)
+            logger.info("Subject %s: training labels shuffled for negative control.", subject_id)
+
+        logger.info("Subject %s: starting sequential benchmark.", subject_id)
+        checkpoint_root = get_model_param_dir() / "benchmark_nn_models" / f"subject_{subject_id:02d}"
+        subject_results = run_all_models_benchmark(
+            X_train,
+            X_test,
+            y_train,
+            y_test,
+            subject_id,
+            checkpoint_root=checkpoint_root,
+        )
+        all_results[f"subject_{subject_id:02d}"] = subject_results
+        save_benchmark_results(subject_results, output_dir, subject_id)
+
+        metrics_for_plot = {
+            metric.model_name: {
+                "accuracy": metric.accuracy,
+                "kappa": metric.kappa,
+            }
+            for metric in subject_results
+            if metric.checkpoint_path is not None
+        }
+        if metrics_for_plot:
+            plot_metric_bar(
+                results=metrics_for_plot,
+                save_path=output_dir / f"subject_{subject_id:02d}_metrics_bar.png",
+                title="BCICIV2a Neural Network Benchmark",
+            )
+
+    if config.all_subjects:
+        # Convert list[ModelMetrics] → dict[str, dict] for downstream consumers
+        all_results_as_dict: dict[str, dict[str, dict[str, float]]] = {
+            subject_key: _model_metrics_to_dict(metrics)
+            for subject_key, metrics in all_results.items()
+        }
+
+        # Long-form CSV
+        export_all_subjects_metrics_csv(
+            all_results=all_results_as_dict,
+            save_path=output_dir / "all_subjects_metrics.csv",
+        )
+
+        # Summary statistics (mean ± std)
+        summary = summarize_all_subjects(all_results_as_dict)
+
+        # Combined summary JSON (matches benchmark_trca_wavelet_cnn format)
+        json_payload: dict[str, object] = {
+            "subjects": all_results_as_dict,
+            "summary": summary,
+        }
+        with open(output_dir / "all_subjects_summary.json", "w", encoding="utf-8") as file:
+            json.dump(json_payload, file, ensure_ascii=False, indent=2)
+
+        # Also keep the legacy summary for backwards compatibility
+        legacy_summary = {
+            subject_key: [
+                {
+                    "name": metric.model_name,
+                    "accuracy": metric.accuracy,
+                    "kappa": metric.kappa,
+                    "balanced_accuracy": metric.balanced_accuracy,
+                    "train_time": metric.train_time,
+                    "inference_time": metric.inference_time,
+                }
+                for metric in metrics
+            ]
+            for subject_key, metrics in all_results.items()
+        }
+        with open(output_dir / "nn_models_benchmark_summary.json", "w", encoding="utf-8") as file:
+            json.dump(legacy_summary, file, ensure_ascii=False, indent=2)
+
+        # Aggregate summary bar chart
+        plot_aggregate_metric_bar(
+            summary_results=summary,
+            save_path=output_dir / "all_subjects_summary_bar.png",
+        )
+
+        # 3×3 comparison bar grid
+        results_for_grid: dict[int, dict[str, dict[str, float]]] = {
+            int(subject_key.split("_")[1]): all_results_as_dict[subject_key]
+            for subject_key in sorted(all_results_as_dict.keys())
+        }
+        plot_comparison_bar_subject_grid_from_data(
+            save_path=output_dir / "all_subjects_comparison_bar_grid.png",
+            subject_ids=subject_ids,
+            results_by_subject=results_for_grid,
+            n_rows=3,
+            n_cols=3,
+        )
+
+    return {
+        "output_dir": output_dir,
+        "subject_ids": subject_ids,
+        "results": all_results,
+    }

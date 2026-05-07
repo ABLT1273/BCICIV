@@ -23,6 +23,12 @@ def get_model_dir() -> Path:
     return path
 
 
+def get_model_param_dir() -> Path:
+    path = get_script_root() / "model_param"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def get_hybrid_results_dir() -> Path:
     return get_result_group_dir("dim_reduction_hybrid_fbcsp")
 

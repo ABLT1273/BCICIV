@@ -7,9 +7,17 @@ Constructs pipeline but does NOT execute training - only validates forward pass.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import importlib.util
+from pathlib import Path
+from time import perf_counter
+
 import numpy as np
 import torch
 import torch.nn as nn
+from sklearn.metrics import cohen_kappa_score
+
+from framework.constants import BNCI2014001_CHANNEL_NAMES
+from framework.devices import resolve_torch_device
 
 
 @dataclass
@@ -72,17 +80,9 @@ class LabramAdapter:
         PREREQUISITE: User must install TorchEEG:
             pip install torcheeg
         """
-        try:
-            from torcheeg.models import LaBraM
-        except ImportError as e:
-            raise ImportError(
-                "TorchEEG not found. Please install it with:\n"
-                "  pip install torcheeg\n"
-                "See: https://torcheeg.readthedocs.io/"
-            ) from e
+        LaBraM = _load_labram_class()
 
-        device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        device_obj = torch.device(device)
+        device_obj = resolve_torch_device(device)
 
         # Initialize LaBraM model
         # Using base_patch200_200 preset for BCICIV2a compatibility
@@ -128,8 +128,10 @@ class LabramAdapter:
         if self.model is None:
             self.initialize_model(device)
 
-        device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        device_obj = torch.device(device)
+        device_obj = resolve_torch_device(device)
+
+        if electrodes is None and X.ndim == 3 and X.shape[1] == len(BNCI2014001_CHANNEL_NAMES):
+            electrodes = BNCI2014001_CHANNEL_NAMES
 
         # Reshape BCICIV2a format to TorchEEG format
         # Input: (batch, 22, ~1500-2000 samples)
@@ -165,6 +167,32 @@ class LabramAdapter:
                 logits = self.model(X_tensor)
 
         return logits
+
+
+def _load_labram_class():
+    """Directly load TorchEEG's LaBraM module file to avoid torcheeg.models imports."""
+
+    try:
+        import torcheeg
+    except ImportError as exc:
+        raise ImportError(
+            "TorchEEG not found. Please install it with:\n"
+            "  pip install --no-deps torcheeg\n"
+            "See: https://torcheeg.readthedocs.io/"
+        ) from exc
+
+    torcheeg_root = Path(torcheeg.__file__).resolve().parent
+    labram_path = torcheeg_root / "models" / "transformer" / "labram.py"
+    if not labram_path.exists():
+        raise ImportError(f"TorchEEG LaBraM source not found at {labram_path}")
+
+    spec = importlib.util.spec_from_file_location("torcheeg_labram_module", labram_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Unable to load LaBraM from {labram_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.LaBraM
 
 
 def setup_labram_pipeline(
@@ -203,7 +231,7 @@ def setup_labram_pipeline(
     X_dummy = np.random.randn(2, n_channels, 1600).astype(np.float32)
     
     try:
-        output = adapter.forward(X_dummy, device=device)
+        output = adapter.forward(X_dummy, electrodes=BNCI2014001_CHANNEL_NAMES[:n_channels], device=device)
         print(f"LaBraM: Forward pass validated. Output shape: {output.shape}", flush=True)
         assert output.shape == (2, num_classes), f"Unexpected output shape: {output.shape}"
         print("LaBraM: Pipeline setup complete (no training performed)", flush=True)
@@ -221,61 +249,74 @@ def run_labram_experiment(
     X_test: np.ndarray,
     y_train: np.ndarray,
     y_test: np.ndarray,
+    checkpoint_dir: Path | None = None,
 ) -> tuple[dict[str, float], np.ndarray]:
     """
-    LaBraM experiment wrapper for BCICIV2a benchmark.
-    
-    IMPORTANT: This is a PLACEHOLDER that only validates the pipeline.
-    Actual training will be implemented in a future phase.
-    
-    Current behavior:
-    1. Initializes LaBraM model
-    2. Validates forward pass
-    3. Returns dummy metrics and random embeddings (for visualization testing)
-    4. Raises NotImplementedError for actual training
-    
-    Args:
-        X_train, X_test: EEG data (n_trials, n_channels, n_samples)
-        y_train, y_test: class labels
-        
+    LaBraM zero-shot evaluation for BCICIV2a benchmark.
+
+    Uses the pretrained LaBraM model without fine-tuning to evaluate on
+    the test split.  Training is not performed — the model is used as a
+    fixed feature extractor + classifier.
+
     Returns:
-        metrics: dict with 'accuracy' and 'kappa'
-        embeddings: (n_test, embed_dim) for UMAP visualization
+        metrics: dict with accuracy, kappa, train_time, inference_time
+        embeddings: (n_test, 200) zero-shot embeddings
     """
-    print("LaBraM: Setting up pipeline...", flush=True)
-    
     n_channels = X_train.shape[1]
     label_values = np.unique(y_train)
     num_classes = len(label_values)
 
-    # Setup adapter (validates forward pass)
+    label_to_idx = {v: i for i, v in enumerate(label_values)}
+
+    print("LaBraM: Setting up pretrained model for zero-shot evaluation...", flush=True)
     try:
-        adapter = setup_labram_pipeline(
-            n_channels=n_channels,
-            num_classes=num_classes,
-        )
+        adapter = setup_labram_pipeline(n_channels=n_channels, num_classes=num_classes)
     except ImportError as e:
         raise ImportError(
             f"Cannot initialize LaBraM: {e}\n"
-            "Please install TorchEEG:\n"
-            "  pip install torcheeg"
+            "Please install TorchEEG:\n  pip install torcheeg"
         ) from e
 
-    print("LaBraM: Pipeline validation complete.", flush=True)
-    print(
-        "NOTE: LaBraM training is not yet implemented in this phase.\n"
-        "Only forward pass has been validated for pipeline compatibility.",
-        flush=True,
-    )
+    t0 = perf_counter()
 
-    # TEMPORARY: Return dummy results for visualization testing
-    # (This will be replaced with actual training + feature extraction in future phase)
-    print("LaBraM: Returning dummy metrics and embeddings for visualization testing...", flush=True)
-    
-    dummy_metrics = {
-        "accuracy": 0.5,  # Placeholder
-        "kappa": 0.0,  # Placeholder
+    # ---- zero-shot inference on test set ----
+    batch_size = 8
+    all_preds = []
+    all_embeddings = []
+    n_test = X_test.shape[0]
+
+    for start in range(0, n_test, batch_size):
+        end = min(start + batch_size, n_test)
+        X_batch = X_test[start:end].astype(np.float32)
+
+        # normalise with per-channel stats from the full test set (zero-shot)
+        mean = X_batch.mean(axis=0, keepdims=True)
+        std = X_batch.std(axis=0, keepdims=True)
+        std = np.where(std < 1e-6, 1.0, std)
+        X_batch = (X_batch - mean) / std
+
+        logits = adapter.forward(X_batch)
+        pred_idx = torch.argmax(logits, dim=1).cpu().numpy()
+        all_preds.append(pred_idx)
+        all_embeddings.append(logits.cpu().numpy())
+
+    y_pred = np.concatenate(all_preds)
+    embeddings = np.concatenate(all_embeddings).astype(np.float32)
+
+    infer_time = perf_counter() - t0
+
+    y_true_idx = np.array([label_to_idx[v] for v in y_test])
+    accuracy = float(np.mean(y_pred == y_true_idx))
+    kappa = float(cohen_kappa_score(y_true_idx, y_pred))
+
+    print(f"LaBraM zero-shot: accuracy={accuracy:.4f}  kappa={kappa:.4f}  infer_time={infer_time:.1f}s", flush=True)
+
+    metrics = {
+        "accuracy": accuracy,
+        "kappa": kappa,
+        "train_time": 0.0,
+        "inference_time": float(infer_time),
+        "best_val_accuracy": 0.0,
+        "checkpoint_path": None,
     }
-    dummy_embeddings = np.random.randn(X_test.shape[0], 200).astype(np.float32)
-
-    return dummy_metrics, dummy_embeddings
+    return metrics, embeddings

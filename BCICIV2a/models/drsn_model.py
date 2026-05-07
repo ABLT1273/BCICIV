@@ -9,8 +9,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.optim.lr_scheduler as lr_scheduler
 from sklearn.metrics import accuracy_score, cohen_kappa_score
 from torch.utils.data import DataLoader, TensorDataset
+
+from framework.devices import resolve_torch_device
 
 
 def _normalize_eeg(X: np.ndarray, mean: np.ndarray | None = None, std: np.ndarray | None = None):
@@ -111,12 +114,13 @@ def train_drsn(
     y_train: np.ndarray,
     X_val: np.ndarray,
     y_val: np.ndarray,
-    epochs: int = 1,
+    epochs: int = 100,
     batch_size: int = 16,
     learning_rate: float = 1e-3,
+    patience: int = 20,
     device: str | None = None,
 ) -> DRSNResult:
-    device_obj = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    device_obj = resolve_torch_device(device)
     label_values = np.unique(y_train)
 
     X_train_norm, train_mean, train_std = _normalize_eeg(X_train)
@@ -138,19 +142,39 @@ def train_drsn(
 
     model = DRSNClassifier(in_channels=X_train.shape[1], n_classes=len(label_values)).to(device_obj)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+    scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", factor=0.5, patience=10, min_lr=1e-6)
     criterion = nn.CrossEntropyLoss()
 
     best_val = 0.0
-    for _ in range(epochs):
-        _train_epoch(model, train_loader, optimizer, criterion, device_obj)
-        _, val_acc = _eval_epoch(model, val_loader, criterion, device_obj)
-        best_val = max(best_val, val_acc)
+    best_state = None
+    epochs_no_improve = 0
+    for epoch in range(epochs):
+        train_loss = _train_epoch(model, train_loader, optimizer, criterion, device_obj)
+        val_loss, val_acc = _eval_epoch(model, val_loader, criterion, device_obj)
+        scheduler.step(val_acc)
+
+        if val_acc > best_val:
+            best_val = val_acc
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+
+        if (epoch + 1) % 10 == 0 or epoch == 0:
+            print(f"  DRSN epoch {epoch+1:3d}/{epochs}: train_loss={train_loss:.4f}  val_loss={val_loss:.4f}  val_acc={val_acc:.4f}", flush=True)
+
+        if epochs_no_improve >= patience:
+            print(f"  DRSN early stopping at epoch {epoch+1} (best_val_acc={best_val:.4f})", flush=True)
+            break
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
 
     return DRSNResult(model=model, train_mean=train_mean, train_std=train_std, label_values=label_values, best_val_accuracy=best_val)
 
 
 def predict_drsn(result: DRSNResult, X: np.ndarray, device: str | None = None) -> np.ndarray:
-    device_obj = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    device_obj = resolve_torch_device(device)
     X_norm, _, _ = _normalize_eeg(X, result.train_mean, result.train_std)
     xt = torch.from_numpy(X_norm).to(device_obj)
     result.model.eval()
@@ -161,7 +185,7 @@ def predict_drsn(result: DRSNResult, X: np.ndarray, device: str | None = None) -
 
 
 def extract_drsn_features(result: DRSNResult, X: np.ndarray, device: str | None = None) -> np.ndarray:
-    device_obj = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    device_obj = resolve_torch_device(device)
     X_norm, _, _ = _normalize_eeg(X, result.train_mean, result.train_std)
     xt = torch.from_numpy(X_norm).to(device_obj)
     result.model.eval()
@@ -171,7 +195,7 @@ def extract_drsn_features(result: DRSNResult, X: np.ndarray, device: str | None 
 
 
 def setup_drsn_pipeline(n_channels: int = 22, num_classes: int = 4, device: str | None = None) -> DRSNClassifier:
-    device_obj = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    device_obj = resolve_torch_device(device)
     model = DRSNClassifier(in_channels=n_channels, n_classes=num_classes).to(device_obj)
     model.eval()
     return model
@@ -182,6 +206,7 @@ def run_drsn_experiment(
     X_test: np.ndarray,
     y_train: np.ndarray,
     y_test: np.ndarray,
+    checkpoint_dir: Path | None = None,
 ) -> tuple[dict[str, float], np.ndarray]:
     n_train = len(X_train)
     split = max(1, int(n_train * 0.8))
@@ -192,7 +217,7 @@ def run_drsn_experiment(
         y_tr, y_val = y_train[:-1], y_train[-1:]
 
     t0 = perf_counter()
-    result = train_drsn(X_tr, y_tr, X_val, y_val, epochs=1)
+    result = train_drsn(X_tr, y_tr, X_val, y_val, epochs=100)
     train_time = perf_counter() - t0
 
     t1 = perf_counter()
@@ -200,11 +225,29 @@ def run_drsn_experiment(
     features = extract_drsn_features(result, X_test)
     infer_time = perf_counter() - t1
 
+    checkpoint_path: Path | None = None
+    if checkpoint_dir is not None:
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint_path = checkpoint_dir / "drsn_checkpoint.pth"
+        torch.save(
+            {
+                "model_state_dict": {
+                    key: value.detach().cpu() for key, value in result.model.state_dict().items()
+                },
+                "train_mean": result.train_mean,
+                "train_std": result.train_std,
+                "label_values": result.label_values,
+                "best_val_accuracy": result.best_val_accuracy,
+            },
+            checkpoint_path,
+        )
+
     metrics = {
         "accuracy": float(accuracy_score(y_test, y_pred)),
         "kappa": float(cohen_kappa_score(y_test, y_pred)),
         "train_time": float(train_time),
         "inference_time": float(infer_time),
         "best_val_accuracy": float(result.best_val_accuracy),
+        "checkpoint_path": str(checkpoint_path) if checkpoint_path is not None else None,
     }
     return metrics, features

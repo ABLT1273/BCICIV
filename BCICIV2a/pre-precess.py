@@ -53,6 +53,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--show", action="store_true", help="保存后是否弹出图窗。")
     parser.add_argument(
+        "--shuffle-labels",
+        action="store_true",
+        help="启用 negative control：随机打乱训练标签后重新训练，期望 accuracy 约 25%%（4分类 chance level）。",
+    )
+    parser.add_argument(
         "--list-paradigms",
         action="store_true",
         help="只打印已注册范式及说明，不执行实验。",

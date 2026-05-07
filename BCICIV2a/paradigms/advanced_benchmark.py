@@ -6,7 +6,13 @@ import json
 from pathlib import Path
 
 import numpy as np
-from sklearn.metrics import accuracy_score, classification_report, cohen_kappa_score
+from sklearn.metrics import (
+    accuracy_score,
+    balanced_accuracy_score,
+    classification_report,
+    cohen_kappa_score,
+    confusion_matrix,
+)
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -38,6 +44,8 @@ class AdvancedBenchmarkConfig:
     tmax: float = 2.5
     # 模型选择（为了避免默认全量耗时过长）
     enabled_models: list[str] | None = None  # None=所有模型; 或指定列表如["TRCA", "Wavelet", "CNN"]
+    # Negative control: 打乱训练标签以验证模型是否学到真实信号-标签关联
+    shuffle_labels: bool = False
     
     def __post_init__(self):
         if self.enabled_models is None:
@@ -86,7 +94,9 @@ def run_trca_experiment(
 
     metrics = {
         "accuracy": float(accuracy_score(y_test, predictions)),
+        "balanced_accuracy": float(balanced_accuracy_score(y_test, predictions)),
         "kappa": float(cohen_kappa_score(y_test, predictions)),
+        "confusion_matrix": confusion_matrix(y_test, predictions).tolist(),
     }
     print(classification_report(y_test, predictions), flush=True)
     return metrics, test_features
@@ -120,7 +130,9 @@ def run_wavelet_experiment(
 
     metrics = {
         "accuracy": float(accuracy_score(y_test, predictions)),
+        "balanced_accuracy": float(balanced_accuracy_score(y_test, predictions)),
         "kappa": float(cohen_kappa_score(y_test, predictions)),
+        "confusion_matrix": confusion_matrix(y_test, predictions).tolist(),
     }
     print(classification_report(y_test, predictions), flush=True)
     return metrics, test_features
@@ -154,7 +166,9 @@ def run_cnn_experiment(
 
     metrics = {
         "accuracy": float(accuracy_score(y_test, predictions)),
+        "balanced_accuracy": float(balanced_accuracy_score(y_test, predictions)),
         "kappa": float(cohen_kappa_score(y_test, predictions)),
+        "confusion_matrix": confusion_matrix(y_test, predictions).tolist(),
         "best_val_accuracy": float(result.best_val_accuracy),
     }
     print(classification_report(y_test, predictions), flush=True)
@@ -237,6 +251,7 @@ def run_subject_experiment(
     show: bool = False,
     tmin: float = 0.5,
     tmax: float = 2.5,
+    shuffle_train_labels: bool = False,
 ) -> dict[str, object]:
     print("正在读取 BCICIV2a 训练/测试数据...", flush=True)
     X_train, X_test, y_train, y_test, sfreq = load_subject_train_test(
@@ -245,6 +260,10 @@ def run_subject_experiment(
         tmax=tmax,
         channels=None,
     )
+    if shuffle_train_labels:
+        rng = np.random.RandomState(42)
+        y_train = rng.permutation(y_train)
+        print("  [NEGATIVE CONTROL] 训练标签已随机打乱", flush=True)
     print(
         f"被试 {subject_id}: train={X_train.shape}, test={X_test.shape}, sfreq={sfreq}",
         flush=True,
@@ -281,6 +300,7 @@ def run_subject_experiment(
     for method_name, metrics in results.items():
         print(
             f"  - {method_name}: accuracy={metrics['accuracy']:.4f}, "
+            f"balanced_accuracy={metrics.get('balanced_accuracy', float('nan')):.4f}, "
             f"kappa={metrics['kappa']:.4f}",
             flush=True,
         )
@@ -294,22 +314,38 @@ def run_subject_experiment(
 
 def summarize_all_subjects(
     all_results: dict[str, dict[str, dict[str, float]]],
+    condition: str = "normal",
 ) -> dict[str, dict[str, float]]:
+    # Filter by condition: "normal" excludes "_shuffled" keys, "shuffled" includes only "_shuffled"
+    if condition == "normal":
+        filtered = {k: v for k, v in all_results.items() if "_shuffled" not in k}
+    elif condition == "shuffled":
+        filtered = {k: v for k, v in all_results.items() if "_shuffled" in k}
+    else:
+        filtered = all_results
+    if not filtered:
+        return {}
     summary: dict[str, dict[str, float]] = {}
-    method_names = next(iter(all_results.values())).keys()
+    method_names = next(iter(filtered.values())).keys()
 
     for method_name in method_names:
         accuracies = np.asarray(
-            [subject_result[method_name]["accuracy"] for subject_result in all_results.values()],
+            [subject_result[method_name]["accuracy"] for subject_result in filtered.values()],
+            dtype=np.float64,
+        )
+        balanced_accuracies = np.asarray(
+            [subject_result[method_name].get("balanced_accuracy", float("nan")) for subject_result in filtered.values()],
             dtype=np.float64,
         )
         kappas = np.asarray(
-            [subject_result[method_name]["kappa"] for subject_result in all_results.values()],
+            [subject_result[method_name]["kappa"] for subject_result in filtered.values()],
             dtype=np.float64,
         )
         summary[method_name] = {
             "accuracy_mean": float(np.mean(accuracies)),
             "accuracy_std": float(np.std(accuracies)),
+            "balanced_accuracy_mean": float(np.mean(balanced_accuracies)),
+            "balanced_accuracy_std": float(np.std(balanced_accuracies)),
             "kappa_mean": float(np.mean(kappas)),
             "kappa_std": float(np.std(kappas)),
         }
@@ -323,24 +359,36 @@ def export_all_subjects_metrics_csv(
 ) -> None:
     """将所有被试、所有方法的指标保存为长表 CSV。"""
 
+    import json as _json
+
     fieldnames = [
         "subject_id",
         "method",
+        "condition",
         "accuracy",
+        "balanced_accuracy",
         "kappa",
+        "confusion_matrix",
         "best_val_accuracy",
     ]
 
     rows: list[dict[str, object]] = []
     for subject_key, subject_result in all_results.items():
-        subject_id = int(subject_key.split("_")[-1])
+        # subject_key format: "subject_01" or "subject_01_shuffled"
+        parts = subject_key.split("_")
+        subject_id = int(parts[1])
+        condition = "shuffled" if "shuffled" in subject_key else "normal"
         for method_name, metrics in subject_result.items():
+            cm = metrics.get("confusion_matrix", [])
             rows.append(
                 {
                     "subject_id": subject_id,
                     "method": method_name,
+                    "condition": condition,
                     "accuracy": metrics["accuracy"],
+                    "balanced_accuracy": metrics.get("balanced_accuracy", ""),
                     "kappa": metrics["kappa"],
+                    "confusion_matrix": _json.dumps(cm) if cm else "",
                     "best_val_accuracy": metrics.get("best_val_accuracy", ""),
                 }
             )
@@ -362,6 +410,7 @@ def build_config_from_namespace(args: object) -> AdvancedBenchmarkConfig:
         output_dir=output_dir,
         all_subjects=args.all_subjects,
         show=args.show,
+        shuffle_labels=getattr(args, "shuffle_labels", False),
     )
 
 
@@ -389,33 +438,50 @@ def run_from_config(config: AdvancedBenchmarkConfig) -> dict[str, object]:
         embeddings_by_subject[subject_id] = subject_output["umap_embeddings"]
         labels_by_subject[subject_id] = np.asarray(subject_output["labels"])
 
+        if config.shuffle_labels:
+            print(f"\n----- 被试 {subject_id} Negative Control: Label Shuffle -----", flush=True)
+            shuffled_output = run_subject_experiment(
+                subject_id=subject_id,
+                output_dir=output_dir,
+                show=False,
+                tmin=config.tmin,
+                tmax=config.tmax,
+                shuffle_train_labels=True,
+            )
+            all_results[f"subject_{subject_id:02d}_shuffled"] = shuffled_output["results"]
+
     export_all_subjects_metrics_csv(
         all_results=all_results,
         save_path=output_dir / "all_subjects_metrics.csv",
     )
 
     summary = None
+    summary_shuffled = None
     if config.all_subjects:
-        summary = summarize_all_subjects(all_results)
+        summary = summarize_all_subjects(all_results, condition="normal")
+        json_payload: dict[str, object] = {
+            "subjects": all_results,
+            "summary": summary,
+        }
+        if config.shuffle_labels:
+            summary_shuffled = summarize_all_subjects(all_results, condition="shuffled")
+            json_payload["summary_shuffled"] = summary_shuffled
         with open(
             output_dir / "all_subjects_summary.json",
             "w",
             encoding="utf-8",
         ) as file:
-            json.dump(
-                {
-                    "subjects": all_results,
-                    "summary": summary,
-                },
-                file,
-                ensure_ascii=False,
-                indent=2,
-            )
+            json.dump(json_payload, file, ensure_ascii=False, indent=2)
 
         plot_aggregate_metric_bar(
             summary_results=summary,
             save_path=output_dir / "all_subjects_summary_bar.png",
         )
+        if config.shuffle_labels and summary_shuffled:
+            plot_aggregate_metric_bar(
+                summary_results=summary_shuffled,
+                save_path=output_dir / "all_subjects_summary_bar_shuffled.png",
+            )
 
         plot_umap_subject_method_grid_from_data(
             save_path=output_dir / "all_subjects_umap3d_grid.png",
@@ -456,14 +522,15 @@ def run_from_config(config: AdvancedBenchmarkConfig) -> dict[str, object]:
             n_cols=1,
         )
 
-        print("\n全部被试平均结果：", flush=True)
-        for method_name, metrics in summary.items():
-            print(
-                f"  - {method_name}: "
-                f"accuracy={metrics['accuracy_mean']:.4f}±{metrics['accuracy_std']:.4f}, "
-                f"kappa={metrics['kappa_mean']:.4f}±{metrics['kappa_std']:.4f}",
-                flush=True,
-            )
+        if summary is not None:
+            print("\n全部被试平均结果：", flush=True)
+            for method_name, metrics in summary.items():
+                print(
+                    f"  - {method_name}: "
+                    f"accuracy={metrics['accuracy_mean']:.4f}±{metrics['accuracy_std']:.4f}, "
+                    f"kappa={metrics['kappa_mean']:.4f}±{metrics['kappa_std']:.4f}",
+                    flush=True,
+                )
 
     return {
         "output_dir": output_dir,
