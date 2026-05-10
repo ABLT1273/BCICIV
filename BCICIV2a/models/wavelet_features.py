@@ -19,7 +19,7 @@ class WaveletEnergyFeatureExtractor(BaseEstimator, TransformerMixin):
     实现思路：
     1. 对每个 trial、每个通道做连续小波变换(CWT)。
     2. 在 mu / beta 等频带内计算平均能量。
-    3. 计算频带功率分布的 Shannon 熵，补充“能量是否集中”的信息。
+    3. 计算频带功率分布的 Shannon 熵，补充"能量是否集中"的信息。
 
     这类特征比静态 PSD 更强调时频局部变化，适合运动想象中短暂的节律抑制/增强现象。
     """

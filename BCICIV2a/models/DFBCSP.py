@@ -131,7 +131,7 @@ class BinaryDFBCSP_Pipeline:
 
         # 2. 对每个选中频带独立拟合 CSP
         for i in range(n_sel):
-            csp = CSP(n_components=2 * self.m, reg=None, log=True, norm_trace=False)
+            csp = CSP(n_components=2 * self.m, reg="ledoit_wolf", log=True, norm_trace=False)
             csp.fit(X_sel[i], y_binary)
             self.csps.append(csp)
             features.append(csp.transform(X_sel[i]))

@@ -118,27 +118,21 @@ def test_paradigm_integration():
     """Test paradigm integration."""
     logger.info("Testing paradigm integration...")
     try:
-        from paradigms.nn_models_benchmark import run_paradigm
-        
+        from paradigms.nn_models_benchmark import run_from_config, NNModelsBenchmarkConfig
+
         logger.info("  ✓ Paradigm import successful")
-        
-        # Create dummy data
-        X_train = np.random.randn(20, 22, 1500).astype(np.float32)
-        X_test = np.random.randn(10, 22, 1500).astype(np.float32)
-        y_train = np.random.randint(0, 4, 20)
-        y_test = np.random.randint(0, 4, 10)
-        
-        # Run paradigm (this will attempt to run all models)
-        logger.info("  Running paradigm with dummy data...")
-        result = run_paradigm(
-            X_train, X_test, y_train, y_test,
+
+        config = NNModelsBenchmarkConfig(
             subject_id=1,
-            output_base_dir="/tmp/test_benchmark"
+            output_dir=Path("/tmp/test_benchmark"),
         )
-        
+
+        logger.info("  Running paradigm with dummy data...")
+        result = run_from_config(config)
+
         logger.info("  ✓ Paradigm execution successful")
         logger.info(f"    Benchmark result structure: {list(result.keys())}")
-        
+
         return True
     except Exception as e:
         logger.error(f"  ✗ Paradigm test failed: {e}")

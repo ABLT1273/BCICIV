@@ -4,11 +4,19 @@ BCICIV2a 统一入口。
 这个脚本把现有范式统一收口到一个入口：
 - hybrid_fbcsp_umap
 - advanced_feature_benchmark
+- nn_models_benchmark
+- loso_benchmark
 
 运行示例：
 test_newPyEnv/.venv/bin/python test_newPyEnv/BCICIV/BCICIV2a/pre-precess.py --paradigm hybrid_fbcsp_umap --subject 1
 test_newPyEnv/.venv/bin/python test_newPyEnv/BCICIV/BCICIV2a/pre-precess.py --paradigm advanced_feature_benchmark --subject 1
 test_newPyEnv/.venv/bin/python test_newPyEnv/BCICIV/BCICIV2a/pre-precess.py --paradigm advanced_feature_benchmark --all-subjects
+
+# LOSO 跨被试泛化评估
+test_newPyEnv/.venv/bin/python test_newPyEnv/BCICIV/BCICIV2a/pre-precess.py --paradigm loso_benchmark
+test_newPyEnv/.venv/bin/python test_newPyEnv/BCICIV/BCICIV2a/pre-precess.py --paradigm loso_benchmark --models TCN,ATCNet,DRSN
+test_newPyEnv/.venv/bin/python test_newPyEnv/BCICIV/BCICIV2a/pre-precess.py --paradigm loso_benchmark --same-session
+test_newPyEnv/.venv/bin/python test_newPyEnv/BCICIV/BCICIV2a/pre-precess.py --paradigm loso_benchmark --shuffle-labels
 """
 
 from __future__ import annotations
@@ -56,6 +64,17 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--shuffle-labels",
         action="store_true",
         help="启用 negative control：随机打乱训练标签后重新训练，期望 accuracy 约 25%%（4分类 chance level）。",
+    )
+    parser.add_argument(
+        "--same-session",
+        action="store_true",
+        help="LOSO 模式下使用 same-session 切分 (train on Session T, test on Session T)。默认使用 cross-session。",
+    )
+    parser.add_argument(
+        "--models",
+        type=str,
+        default=None,
+        help="LOSO 模式下指定模型列表，逗号分隔。例如: --models TCN,ATCNet,DRSN",
     )
     parser.add_argument(
         "--list-paradigms",

@@ -81,13 +81,13 @@ class Shrinkage(nn.Module):
 class RSNet(nn.Module):
     """Residual shrinkage network composed of four downsampling stages."""
 
-    def __init__(self, block, num_block, num_classes=4):
+    def __init__(self, block, num_block, num_classes=4, in_channels=1):
         super().__init__()
 
         self.in_channels = 64
 
         self.conv1 = nn.Sequential(
-            nn.Conv1d(1, 64, kernel_size=3, padding=1, bias=False),
+            nn.Conv1d(in_channels, 64, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm1d(64),
             nn.ReLU(inplace=True))
         # we use a different inputsize than the original paper
@@ -139,9 +139,14 @@ class RSNet(nn.Module):
         return output
 
 
-def rsnet18():
+def rsnet10(**kwargs):
+    """Build the 10-layer RSNet variant (lightweight, ~2M params)."""
+    return RSNet(BasicBlock, [1, 1, 1, 1], **kwargs)
+
+
+def rsnet18(**kwargs):
     """Build the 18-layer RSNet variant."""
-    return RSNet(BasicBlock, [2, 2, 2, 2])
+    return RSNet(BasicBlock, [2, 2, 2, 2], **kwargs)
 
 
 def rsnet34():

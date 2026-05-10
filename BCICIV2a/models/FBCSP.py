@@ -160,7 +160,7 @@ class BinaryFBCSP_Pipeline:
 
         # 1. 独立计算每个频带的 CSP
         for i in range(n_bands):
-            csp = CSP(n_components=2*self.m, reg=None, log=True, norm_trace=False)
+            csp = CSP(n_components=2*self.m, reg="ledoit_wolf", log=True, norm_trace=False)
             csp.fit(X_fb[i], y_binary)
             self.csps.append(csp)
             features.append(csp.transform(X_fb[i]))

@@ -17,6 +17,19 @@ def get_result_group_dir(group_name: str) -> Path:
     return path
 
 
+def get_paradigm_result_dir(paradigm: str, group_name: str) -> Path:
+    """Return a results path scoped to a data-split paradigm.
+
+    Paradigms:
+        within_subject  – T→E, train on session T, test on session E
+        cross_session   – E→T and T→T evaluations
+        loso            – Leave-One-Subject-Out cross-subject
+    """
+    path = get_results_root() / paradigm / group_name
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def get_model_dir() -> Path:
     path = get_script_root() / "model"
     path.mkdir(parents=True, exist_ok=True)
@@ -27,14 +40,6 @@ def get_model_param_dir() -> Path:
     path = get_script_root() / "model_param"
     path.mkdir(parents=True, exist_ok=True)
     return path
-
-
-def get_hybrid_results_dir() -> Path:
-    return get_result_group_dir("dim_reduction_hybrid_fbcsp")
-
-
-def get_advanced_results_dir() -> Path:
-    return get_result_group_dir("benchmark_trca_wavelet_cnn")
 
 
 def get_results_index_path() -> Path:

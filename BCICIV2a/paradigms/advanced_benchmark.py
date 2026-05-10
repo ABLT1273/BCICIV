@@ -24,7 +24,7 @@ from models.deep_cnn_features import (
     train_tiny_eeg_cnn,
 )
 from framework.data import load_subject_train_test, select_named_channels
-from framework.paths import get_advanced_results_dir
+from framework.paths import get_result_group_dir
 from framework.plotting import (
     plot_comparison_bar_subject_grid_from_data,
     plot_aggregate_metric_bar,
@@ -49,7 +49,7 @@ class AdvancedBenchmarkConfig:
     
     def __post_init__(self):
         if self.enabled_models is None:
-            self.enabled_models = ["TRCA", "Wavelet", "CNN", "TCN", "ATCNet", "DRSN", "LaBraM"]
+            self.enabled_models = ["TRCA", "Wavelet", "CNN"]
 
 
 def reduce_for_visualization(features: np.ndarray) -> np.ndarray:
@@ -157,7 +157,7 @@ def run_cnn_experiment(
         y_train_sub,
         X_val_sub,
         y_val_sub,
-        epochs=12,
+        epochs=50,
         batch_size=64,
         learning_rate=1e-3,
     )
@@ -404,7 +404,7 @@ def export_all_subjects_metrics_csv(
 def build_config_from_namespace(args: object) -> AdvancedBenchmarkConfig:
     """把统一 CLI 参数转成当前范式的配置对象。"""
 
-    output_dir = args.output_dir if args.output_dir is not None else get_advanced_results_dir()
+    output_dir = args.output_dir if args.output_dir is not None else get_result_group_dir("benchmark_trca_wavelet_cnn")
     return AdvancedBenchmarkConfig(
         subject_id=args.subject,
         output_dir=output_dir,
@@ -417,7 +417,7 @@ def build_config_from_namespace(args: object) -> AdvancedBenchmarkConfig:
 def run_from_config(config: AdvancedBenchmarkConfig) -> dict[str, object]:
     """执行 TRCA / Wavelet / CNN 综合对比实验。"""
 
-    output_dir = config.output_dir or get_advanced_results_dir()
+    output_dir = config.output_dir or get_result_group_dir("benchmark_trca_wavelet_cnn")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     subject_ids = list(range(1, 10)) if config.all_subjects else [config.subject_id]

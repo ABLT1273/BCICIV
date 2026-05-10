@@ -27,6 +27,7 @@ from typing import Any
 import numpy as np
 
 from framework.data import load_subject_train_test
+from framework.metrics import compute_accuracy_kappa
 from framework.paths import get_model_param_dir, get_result_group_dir
 from framework.plotting import (
     plot_aggregate_metric_bar,
@@ -165,33 +166,6 @@ def build_config_from_namespace(args: object) -> NNModelsBenchmarkConfig:
         show=args.show,
         shuffle_labels=getattr(args, "shuffle_labels", False),
     )
-
-
-def compute_accuracy_kappa(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, float]:
-    """
-    Compute accuracy and Cohen's kappa coefficient.
-    
-    Args:
-        y_true: ground truth labels
-        y_pred: predicted labels
-        
-    Returns:
-        accuracy, kappa
-    """
-    accuracy = np.mean(y_true == y_pred)
-    
-    # Compute kappa using sklearn's formula
-    n = len(y_true)
-    po = accuracy  # Observed agreement
-    
-    # Expected agreement (assuming uniform class distribution for simplicity)
-    unique_labels = np.unique(y_true)
-    n_classes = len(unique_labels)
-    pe = 1.0 / n_classes  # For uniform distribution
-    
-    kappa = (po - pe) / (1.0 - pe) if pe < 1.0 else 0.0
-    
-    return float(accuracy), float(kappa)
 
 
 def run_tcn_benchmark(
@@ -347,6 +321,7 @@ def run_labram_benchmark(
     y_train: np.ndarray,
     y_test: np.ndarray,
     checkpoint_dir: Path | None = None,
+    subject_id: int | None = None,
 ) -> ModelMetrics:
     """
     Run LaBraM model benchmark.
@@ -360,10 +335,10 @@ def run_labram_benchmark(
     """
     logger.info("LaBraM: Initializing model...")
     try:
-        from models.labram_adapter import setup_labram_pipeline, run_labram_experiment
+        from models.labram_adapter import run_labram_experiment
         
         logger.info("LaBraM: Running experiment...")
-        metrics_dict, _ = run_labram_experiment(X_train, X_test, y_train, y_test, checkpoint_dir=checkpoint_dir)
+        metrics_dict, _ = run_labram_experiment(X_train, X_test, y_train, y_test, checkpoint_dir=checkpoint_dir, subject_id=subject_id)
         
         return ModelMetrics(
             model_name="LaBraM",
@@ -426,7 +401,7 @@ def run_all_models_benchmark(
             elif model_name == "DRSN":
                 metrics = run_drsn_benchmark(X_train, X_test, y_train, y_test, checkpoint_dir=checkpoint_dir)
             else:
-                metrics = model_func(X_train, X_test, y_train, y_test, checkpoint_dir=checkpoint_dir)
+                metrics = model_func(X_train, X_test, y_train, y_test, checkpoint_dir=checkpoint_dir, subject_id=subject_id)
             results.append(metrics)
             logger.info(f"{model_name}: Accuracy={metrics.accuracy:.4f}, Kappa={metrics.kappa:.4f}")
         except Exception as e:
@@ -475,72 +450,6 @@ def save_benchmark_results(
         json.dump(results_dict, f, indent=2)
     
     logger.info(f"Results saved to {output_file}")
-
-
-def run_paradigm(
-    X_train: np.ndarray,
-    X_test: np.ndarray,
-    y_train: np.ndarray,
-    y_test: np.ndarray,
-    subject_id: int | None = None,
-    output_base_dir: str | None = None,
-) -> dict[str, Any]:
-    """
-    Main entry point for nn_models_benchmark paradigm.
-    
-    Args:
-        X_train, X_test: EEG data (n_trials, n_channels, n_samples)
-        y_train, y_test: class labels
-        subject_id: optional subject identifier for logging
-        output_base_dir: directory to save results
-        
-    Returns:
-        Dictionary with benchmark results and summary
-    """
-    logger.info(f"Starting NN Models Benchmark Paradigm")
-    logger.info(f"  X_train shape: {X_train.shape}")
-    logger.info(f"  X_test shape: {X_test.shape}")
-    logger.info(f"  y_train classes: {np.unique(y_train)}")
-    
-    # Run benchmark for all models
-    results = run_all_models_benchmark(X_train, X_test, y_train, y_test, subject_id)
-    
-    # Save results if output directory is provided
-    if output_base_dir is not None:
-        output_dir = Path(output_base_dir) / "nn_models_benchmark"
-        save_benchmark_results(results, output_dir, subject_id)
-    
-    # Compute summary
-    accuracies = [r.accuracy for r in results]
-    kappas = [r.kappa for r in results]
-    
-    summary = {
-        "subject_id": subject_id,
-        "benchmark_name": "nn_models_benchmark",
-        "num_models": len(results),
-        "models_tested": [r.model_name for r in results],
-        "mean_accuracy": float(np.mean(accuracies)),
-        "mean_kappa": float(np.mean(kappas)),
-        "best_model": max(results, key=lambda r: r.accuracy).model_name if results else None,
-        "best_accuracy": float(max(accuracies)) if accuracies else 0.0,
-        "results": [
-            {
-                "model_name": r.model_name,
-                "accuracy": r.accuracy,
-                "balanced_accuracy": r.balanced_accuracy,
-                "kappa": r.kappa,
-                "confusion_matrix": r.confusion_matrix,
-            }
-            for r in results
-        ],
-    }
-    
-    logger.info(f"Benchmark Summary:")
-    logger.info(f"  Mean Accuracy: {summary['mean_accuracy']:.4f}")
-    logger.info(f"  Mean Kappa: {summary['mean_kappa']:.4f}")
-    logger.info(f"  Best Model: {summary['best_model']} ({summary['best_accuracy']:.4f})")
-    
-    return summary
 
 
 def run_from_config(config: NNModelsBenchmarkConfig) -> dict[str, object]:

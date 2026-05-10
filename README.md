@@ -21,7 +21,8 @@ BCICIV/
     ├── results/             实验输出
     │   ├── benchmark_trca_wavelet_cnn/
     │   ├── dim_reduction_hybrid_fbcsp/
-    │   └── benchmark_nn_models/
+    │   ├── benchmark_nn_models/
+    │   └── loso_benchmark/
     ├── pre-precess.py       统一实验入口
     ├── test_nn_models_pipeline.py  DL 模型前向验证测试
     ├── IMPLEMENTATION_SUMMARY.md   实现总结
@@ -43,6 +44,7 @@ BCICIV/
 |---|---|
 | `runtime.py` | 统一配置 MNE / MOABB / matplotlib 缓存目录 |
 | `data.py` | 加载单被试 epoch 数据（`load_subject_epochs` / `load_subject_train_test`），按 Session T/E 划分训练/测试集 |
+| `cv_split.py` | LOSO / cross-session 切分工具（`generate_loso_folds` / `build_loso_fold`），供 LOSO 范式调用 |
 | `constants.py` | 标签映射、通道名、方法排序与显示名等全局常量 |
 | `paths.py` | 各目录路径工具函数（`get_model_dir` / `get_results_root` 等） |
 | `plotting.py` | 3D UMAP 可视化、对比柱状图、全被试聚合网格图（支持内存直接出图 + 文件拼接两种管路） |
@@ -112,6 +114,9 @@ y_pred = pipeline['ovr_ensemble'].predict(pipeline['filter_bank'].transform(X_te
 | `advanced_benchmark.py` | `advanced_feature_benchmark` | 对比 TRCA / Wavelet / CNN 分类性能（含 UMAP 可视化） |
 | `hybrid_fbcsp_umap.py` | `hybrid_fbcsp_umap` | C3/C4 + FBCSP 特征融合后 UMAP 降维可视化 |
 | `nn_models_benchmark.py` | `nn_models_benchmark` | TCN / ATCNet / DRSN / LaBraM 四模型基准测试 |
+| `csp_lda_benchmark.py` | — | CSP+LDA / CSP+SVM 基准 |
+| `fbcsp_dfbcsp_benchmark.py` | — | FBCSP / DFBCSP 基准 |
+| `loso_benchmark.py` | `loso_benchmark` | LOSO / cross-session 跨被试泛化评估 (TCN / ATCNet / DRSN / LaBraM) |
 
 > **注意**：TCN / ATCNet / DRSN 已完成训练回路实现（含 LR scheduler、early stopping、checkpoint 落盘）；LaBraM 使用 TorchEEG 预训练权重进行 zero-shot 评估，fine-tuning 训练尚未实现。
 
@@ -122,6 +127,7 @@ y_pred = pipeline['ovr_ensemble'].predict(pipeline['filter_bank'].transform(X_te
 | `benchmark_trca_wavelet_cnn/` | `advanced_feature_benchmark` | 全被试 CSV + UMAP 3D 总图 + comparison bar 总图 + 全被试汇总 |
 | `dim_reduction_hybrid_fbcsp/` | `hybrid_fbcsp_umap` | UMAP 嵌入 .npz + 3D 可视化图 |
 | `benchmark_nn_models/` | `nn_models_benchmark` | 全被试 CSV + aggregate summary JSON + summary bar + comparison bar grid + 单被试指标 JSON |
+| `loso_benchmark/` | `loso_benchmark` | LOSO 全 fold JSON + CSV + aggregate bar chart；checkpoint 落盘 `model_param/loso/` |
 
 `advanced_feature_benchmark` 和 `nn_models_benchmark` 均采用"内存聚合再落盘"的输出管路：
 
@@ -155,19 +161,34 @@ cd test_newPyEnv
 
 # 验证 DL 模型前向传播
 .venv/bin/python BCICIV/BCICIV2a/test_nn_models_pipeline.py
+
+# LOSO 跨被试泛化评估 (cross-session 默认)
+.venv/bin/python BCICIV/BCICIV2a/pre-precess.py --paradigm loso_benchmark --models TCN,ATCNet,DRSN
+
+# LOSO same-session
+.venv/bin/python BCICIV/BCICIV2a/pre-precess.py --paradigm loso_benchmark --same-session
+
+# LOSO negative control (label shuffle)
+.venv/bin/python BCICIV/BCICIV2a/pre-precess.py --paradigm loso_benchmark --shuffle-labels
 ```
 
 ---
 
 ## 数据切分策略
 
-当前所有范式使用 `framework/data.py` 中的 `load_subject_train_test()`，按 **Session T（训练）/ Session E（评估）** 切分。这是 BCICIV2a 竞赛标准的 within-subject cross-session 方案，**不是 LOSO**。
+| 切分方式 | 训练集 | 测试集 | 范式 | 说明 |
+|---------|--------|--------|------|------|
+| **within-subject** | 被试 X, Session T | 被试 X, Session E | 全部非 LOSO 范式 | BCICIV2a 竞赛标准方案 |
+| **LOSO** | N-1 被试, Session T | 留出被试, Session **T** | `loso_benchmark --same-session` | 跨被试泛化 (无 session 偏移) |
+| **cross-session** | N-1 被试, Session T | 留出被试, Session **E** | `loso_benchmark` (默认) | 跨被试 + 跨 session 泛化 |
 
-切分逻辑：
+within-subject 切分逻辑（`framework/data.py`）：
 ```python
 is_train = metadata["session"].astype(str).str.contains("train")
 is_test  = metadata["session"].astype(str).str.contains("test")
 ```
+
+LOSO / cross-session 切分逻辑见 `framework/cv_split.py`，支持 9-fold 逐被试留出。每个 fold 的模型 checkpoint 独立保存至 `model_param/loso/{model_name}/fold_S{XX}/`。
 
 ---
 

@@ -13,15 +13,8 @@ import torch.optim.lr_scheduler as lr_scheduler
 from sklearn.metrics import accuracy_score, cohen_kappa_score
 from torch.utils.data import DataLoader, TensorDataset
 
+from framework.data import apply_zscore as _normalize_eeg
 from framework.devices import resolve_torch_device
-
-
-def _normalize_eeg(X: np.ndarray, mean: np.ndarray | None = None, std: np.ndarray | None = None):
-    if mean is None or std is None:
-        mean = X.mean(axis=0, keepdims=True)
-        std = X.std(axis=0, keepdims=True)
-    std = np.where(std < 1e-6, 1.0, std)
-    return ((X - mean) / std).astype(np.float32), mean, std
 
 
 def _to_index(y: np.ndarray, label_values: np.ndarray) -> np.ndarray:
@@ -35,23 +28,40 @@ def _load_official_module():
     return official_drsn
 
 
-def _build_backbone(num_classes: int) -> nn.Module:
+def _build_backbone(backbone_in_channels: int, num_classes: int) -> nn.Module:
     official = _load_official_module()
-    backbone = official.rsnet18()
-    # Replace the original classifier so the official feature extractor remains intact.
+    # Use lightweight rsnet10 (~2-3M params) instead of rsnet18 (~11M)
+    backbone = official.rsnet10(in_channels=backbone_in_channels)
     backbone.fc = nn.Identity()
     return backbone
 
 
 class DRSNClassifier(nn.Module):
-    """EEG adapter around the official 1-channel DRSN backbone."""
+    """EEG adapter around the official multi-channel DRSN backbone.
+
+    Changes from baseline:
+    - Channel projection: Conv1d(22→1) → Conv1d(22→8), preserving spatial info
+    - Backbone: rsnet18 → rsnet10, reducing params from ~11M to ~2-3M
+    - Dropout: added 0.3 after embedding for regularization
+    """
 
     def __init__(self, in_channels: int, n_classes: int, embedding_dim: int = 64):
         super().__init__()
-        self.channel_projection = nn.Conv1d(in_channels, 1, kernel_size=1, bias=False)
-        self.backbone = _build_backbone(n_classes)
-        self.embedding = nn.Linear(512, embedding_dim)
-        self.classifier = nn.Linear(embedding_dim, n_classes)
+        self.channel_proj_dim = 8
+        self.channel_projection = nn.Conv1d(in_channels, self.channel_proj_dim, kernel_size=1, bias=False)
+        self.backbone = _build_backbone(self.channel_proj_dim, n_classes)
+        self.embedding = nn.Sequential(
+            nn.Linear(512, embedding_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3),
+        )
+        self.classifier = nn.Sequential(
+            nn.Linear(embedding_dim, embedding_dim // 2),
+            nn.BatchNorm1d(embedding_dim // 2),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3),
+            nn.Linear(embedding_dim // 2, n_classes),
+        )
 
     def forward(self, x: torch.Tensor, return_features: bool = False) -> torch.Tensor:
         if x.ndim == 4:
@@ -143,7 +153,7 @@ def train_drsn(
     model = DRSNClassifier(in_channels=X_train.shape[1], n_classes=len(label_values)).to(device_obj)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", factor=0.5, patience=10, min_lr=1e-6)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
     best_val = 0.0
     best_state = None

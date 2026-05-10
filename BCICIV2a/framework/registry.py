@@ -67,6 +67,48 @@ PARADIGM_REGISTRY = {
         entry_script="pre-precess.py",
         module="paradigms.nn_models_benchmark",
     ),
+    "loso_benchmark": ParadigmSpec(
+        key="loso_benchmark",
+        display_name="LOSO (Leave-One-Subject-Out) Benchmark",
+        description="跨被试泛化评估: 每次留一个被试做测试, 其余被试 Session T 训练。支持 cross-session 和 same-session 两种模式。",
+        components=(
+            "framework.runtime.prepare_runtime_environment",
+            "framework.cv_split.generate_loso_folds",
+            "TCN / ATCNet / DRSN / LaBraM fold runners",
+            "framework.plotting.plot_aggregate_metric_bar",
+        ),
+        default_result_group="loso_benchmark",
+        entry_script="pre-precess.py",
+        module="paradigms.loso_benchmark",
+    ),
+    "csp_lda_benchmark": ParadigmSpec(
+        key="csp_lda_benchmark",
+        display_name="CSP + LDA Baseline",
+        description="经典 CSP 空间滤波 + LDA 分类器作为传统方法基线。同时提供 CSP+SVM 变体。",
+        components=(
+            "framework.runtime.prepare_runtime_environment",
+            "framework.data.load_subject_train_test",
+            "MNE CSP spatial filter",
+            "sklearn LDA / SVM classifier",
+        ),
+        default_result_group="benchmark_csp_lda",
+        entry_script="pre-precess.py",
+        module="paradigms.csp_lda_benchmark",
+    ),
+    "fbcsp_dfbcsp_benchmark": ParadigmSpec(
+        key="fbcsp_dfbcsp_benchmark",
+        display_name="FBCSP + DFBCSP Benchmark",
+        description="滤波器组 CSP 及其判别式变体 DFBCSP 的对比基准。",
+        components=(
+            "framework.runtime.prepare_runtime_environment",
+            "framework.data.load_subject_train_test",
+            "models.FBCSP (FilterBank + OVR_FBCSP_Ensemble)",
+            "models.DFBCSP (OVR_DFBCSP_Ensemble)",
+        ),
+        default_result_group="benchmark_fbcsp_dfbcsp",
+        entry_script="pre-precess.py",
+        module="paradigms.fbcsp_dfbcsp_benchmark",
+    ),
 }
 
 

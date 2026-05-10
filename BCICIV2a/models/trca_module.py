@@ -12,16 +12,16 @@ class TRCAFeatureExtractor(BaseEstimator, TransformerMixin):
     """
     用 TRCA(Task-Related Component Analysis) 提取多类 BCI 特征。
 
-    这里采用“每个类别各自学习一组 TRCA 空间滤波器”的做法：
+    这里采用"每个类别各自学习一组 TRCA 空间滤波器"的做法：
     1. 对某一类的训练 trial，最大化 trial 之间的相关协方差。
-    2. 求出该类别最稳定、最“任务相关”的空间滤波器。
+    2. 求出该类别最稳定、最"任务相关"的空间滤波器。
     3. 用这些滤波器把任意 trial 投影到低维空间，再提取 log-variance 与模板相关性特征。
 
-    对于运动想象任务，这种做法能更强调“同类 trial 之间的稳定模式”，
+    对于运动想象任务，这种做法能更强调"同类 trial 之间的稳定模式"，
     往往比纯频带能量更贴近任务相关神经活动。
     """
 
-    def __init__(self, n_components: int = 3, reg: float = 1e-6):
+    def __init__(self, n_components: int = 3, reg: float = 1e-4):
         self.n_components = n_components
         self.reg = reg
         self.classes_: np.ndarray | None = None
@@ -44,7 +44,7 @@ class TRCAFeatureExtractor(BaseEstimator, TransformerMixin):
         centered_trials = [self._center_trial(trial) for trial in X_class]
         n_channels = centered_trials[0].shape[0]
 
-        # S 统计“同一类别不同 trial 之间”的互协方差，是 TRCA 的任务相关部分。
+        # S 统计"同一类别不同 trial 之间"的互协方差，是 TRCA 的任务相关部分。
         S = np.zeros((n_channels, n_channels), dtype=np.float64)
         for i in range(len(centered_trials)):
             Xi = centered_trials[i]
@@ -57,7 +57,7 @@ class TRCAFeatureExtractor(BaseEstimator, TransformerMixin):
         for Xi in centered_trials:
             Q += Xi @ Xi.T
 
-        Q += self.reg * np.eye(n_channels)
+        Q += self.reg * np.trace(Q) / n_channels * np.eye(n_channels)
 
         eigenvalues, eigenvectors = eigh(S, Q)
         order = np.argsort(eigenvalues)[::-1]
@@ -114,7 +114,7 @@ class TRCAFeatureExtractor(BaseEstimator, TransformerMixin):
                 component_correlations.append(correlation)
                 trial_features.append(correlation)
 
-            # 模板分数单独保存，后面可以直接作为“TRCA 模板匹配概率”的基础。
+            # 模板分数单独保存，后面可以直接作为"TRCA 模板匹配概率"的基础。
             template_scores.append(float(np.mean(component_correlations)))
 
         return trial_features, template_scores
@@ -163,7 +163,7 @@ class TRCAFeatureExtractor(BaseEstimator, TransformerMixin):
 class TRCAHybridClassifier(BaseEstimator):
     """
     更强的 TRCA 分类头：
-    1. 一路使用 TRCA 模板相关性打分，保留 TRCA 的“任务模板匹配”优势。
+    1. 一路使用 TRCA 模板相关性打分，保留 TRCA 的"任务模板匹配"优势。
     2. 一路使用 RBF-SVM，对 TRCA 特征做非线性分类。
     3. 最后把两路概率加权融合，兼顾模板鲁棒性与判别能力。
     """
@@ -171,7 +171,7 @@ class TRCAHybridClassifier(BaseEstimator):
     def __init__(
         self,
         n_components: int = 3,
-        reg: float = 1e-6,
+        reg: float = 1e-4,
         svm_c: float = 2.0,
         svm_gamma: str = "scale",
         template_weight: float = 0.4,

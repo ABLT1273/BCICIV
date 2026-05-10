@@ -13,6 +13,7 @@ import torch.optim.lr_scheduler as lr_scheduler
 from sklearn.metrics import accuracy_score, cohen_kappa_score
 from torch.utils.data import DataLoader, TensorDataset
 
+from framework.data import apply_zscore as _normalize_eeg
 from framework.devices import resolve_torch_device
 
 
@@ -66,14 +67,6 @@ class TCNResult:
     train_std: np.ndarray
     label_values: np.ndarray
     best_val_accuracy: float
-
-
-def _normalize_eeg(X: np.ndarray, mean: np.ndarray | None = None, std: np.ndarray | None = None):
-    if mean is None or std is None:
-        mean = X.mean(axis=0, keepdims=True)
-        std = X.std(axis=0, keepdims=True)
-    std = np.where(std < 1e-6, 1.0, std)
-    return ((X - mean) / std).astype(np.float32), mean, std
 
 
 def _to_index(y: np.ndarray, label_values: np.ndarray) -> np.ndarray:
@@ -146,7 +139,7 @@ def train_tcn(
     model = TCNClassifier(in_channels=X_train.shape[1], n_classes=len(label_values)).to(device_obj)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", factor=0.5, patience=10, min_lr=1e-6)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
     best_val = 0.0
     best_state = None
