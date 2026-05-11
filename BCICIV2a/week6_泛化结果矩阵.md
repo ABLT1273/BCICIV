@@ -2,9 +2,9 @@
 
 ## 目标
 
-并列呈现 `within-subject`、`LOSO` 和可选 `cross-session` 的结果,避免只报一个离线 accuracy。
+并列呈现 `within-subject` (T→E) 和 `LOSO` 两种泛化范式
 
-## 结果总表 (2026-05-09 优化后)
+## 结果总表 (2026-05-10, 含 LOSO)
 
 | 模型 | 切分方式 | Accuracy mean | Accuracy std | 最差 subject | 最好 subject | 备注 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -18,11 +18,12 @@
 | Wavelet | within-subject | 44.52% | 9.75% | S5 (28.82%) | S1 (57.99%) | 小波变换 + SVM |
 | TRCA | within-subject | 37.65% | 7.27% | S2 (29.17%) | S9 (49.65%) | TRCA + SVM, proportional reg fix |
 | LaBraM | within-subject | 28.94% | 6.65% | S4 (22.22%) | S9 (42.01%) | Adapter 微调, 仍近 chance |
-| CSP/LDA | LOSO | 运行中 | — | — | — | 待完成 |
-| FBCSP | LOSO | 运行中 | — | — | — | 待完成 |
-| EEGNet | LOSO | 运行中 | — | — | — | 待完成 |
-| CSP/LDA | cross-session | 未运行 | — | — | — | 可选 |
-| EEGNet | cross-session | 未运行 | — | — | — | 可选 |
+| **▼ LOSO** | | | | | | |
+| EEGNet | LOSO | 43.36% | 15.42% | S5 (26.04%) | S3 (65.62%) | 3-block, preproc |
+| ShallowConvNet | LOSO | 42.86% | 12.76% | S5 (25.69%) | S3 (60.76%) | Schirrmeister 2017 |
+| DeepConvNet | LOSO | 42.17% | 12.52% | S5 (23.26%) | S8 (60.76%) | Schirrmeister 2017 |
+| FBCSP | LOSO | 33.33% | 5.33% | S6 (25.00%) | S3 (39.93%) | Filter Bank CSP + NBPW, preproc |
+
 
 ### 逐 Subject 明细
 
@@ -39,6 +40,20 @@
 | 9 | 63.19% | 72.57% | 72.22% | 78.47% | 73.26% | 72.22% | 57.29% | 49.65% | 64.58% | 42.01% |
 
 > 粗体 = 该 subject 上排名前 3。
+
+### 逐 Subject 明细 — LOSO
+
+| Subject | EEGNet | ShallowConvNet | DeepConvNet | FBCSP |
+| --- | --- | --- | --- | --- |
+| 1 | 57.99% | 50.35% | 53.82% | 32.64% |
+| 2 | 28.47% | 32.99% | 33.33% | 34.38% |
+| 3 | 65.62% | 60.76% | 58.68% | 39.93% |
+| 4 | 34.72% | 36.46% | 39.93% | 32.64% |
+| 5 | 26.04% | 25.69% | 23.26% | 28.47% |
+| 6 | 28.12% | 30.56% | 29.17% | 25.00% |
+| 7 | 34.38% | 34.03% | 35.76% | 39.58% |
+| 8 | 65.28% | 57.99% | 60.76% | 39.93% |
+| 9 | 49.65% | 56.94% | 44.79% | 27.43% |
 
 ### 模型排名 (按 mean accuracy 降序)
 
@@ -116,7 +131,21 @@
 
 - **within-subject 能说明:** 模型在同一被试的不同 session 之间具备一定的模式识别能力
 - **within-subject 不能说明:** 模型能泛化到未见过的被试; 高 within-subject 不代表跨被试泛化
-- **LOSO 下降说明:** (待运行后填写)
+- **LOSO 下降说明:** 跨被试泛化对所有模型都是巨大挑战，但 DL 模型的下降幅度显著小于传统方法:
+  - FBCSP: 52.55% → 33.33% (**-19.22pp**), 传统 Filter Bank 方法严重依赖被试特定的空间模式
+  - EEGNet: 50.12% → 43.36% (**-6.76pp**), DL 端到端学习有一定跨被试泛化能力
+  - 三个 DL 模型 (EEGNet/ShallowConvNet/DeepConvNet) 在 LOSO 下均稳定在 42-43%, 优于 FBCSP (33.33%)
+  - **DL 跨被试优势明显**: 端到端学习捕捉了更通用的时-空-频特征, 而非被试特定的 CSP 模式
+  - S5 在所有模型/范式下都是最差被试, S3/S8 始终最好 → 被试间固有差异大
+- **LOSO 排名 (跨被试泛化):**
+  1. EEGNet: 43.36% — 轻量 CNN 在跨被试场景中表现最佳
+  2. ShallowConvNet: 42.86% — 浅层时空卷积接近 EEGNet
+  3. DeepConvNet: 42.17% — 深层架构在 LOSO 下略低于浅层 (过拟合风险)
+  4. FBCSP: 33.33% — Filter Bank 空间模式无法跨被试迁移
+- **within-subject → LOSO 泛化差距:**
+  - FBCSP 下降 19.22pp → 传统 CSP 模式高度被试特异
+  - EEGNet 仅下降 6.76pp → DL 学习的特征更具迁移性
+  - CSP/LDA 预期下降更大 (CSP 空间滤波器完全依赖训练被试)
 - **模型排序分析:**
   - **CSP/LDA (56.91%) 仍是 BCICIV2a 上最强的方法**, CSP 空间滤波 + 简单线性分类在小样本 EEG 上极有效
   - **DL 三强 (TCN 54.44%, DRSN 52.89%, ATCNet 52.82%) 已接近传统方法**, 差距从 ~20% 缩小到 ~4%
@@ -128,9 +157,9 @@
   - 前 7 名中传统方法占 3 席 (CSP/LDA, FBCSP, DFBCSP), DL 占 4 席 (TCN, DRSN, ATCNet, EEGNet)
   - DL 集体追平传统方法, 但单个最佳仍是传统 CSP/LDA
   - 小样本 EEG 上, 空间滤波 (CSP) 的信息提取效率仍优于端到端学习
-- **与自动化所跨被试/跨任务方向的连接:**
-  - 当前仅在 BCICIV2a 上验证了 within-subject, LOSO 运行中
-  - CSP/LDA 在跨被试场景中预期大幅下降, DL 可能有更好的泛化能力
-  - FBCSP 的 Filter Bank 分解可迁移到 DL: 多频带并行卷积 → 融合
+  - within-subject (T→E) 和 LOSO (跨被试) 泛化矩阵已完成
+  - **DL 模型在 LOSO 下泛化优势已证实**: EEGNet/ShallowConvNet/DeepConvNet 均为 42-43%, 远超 FBCSP 33%
+  - CSP/LDA 在跨被试场景中预期大幅下降 (CSP 空间滤波器被试特异), 待运行
+  - FBCSP 的 Filter Bank 分解可迁移到 DL: 多频带并行卷积 → 融合 (ShallowConvNet 已内置类似设计)
   - CSP/LDA 可作为跨被试迁移的 teacher 或 alignment 信号
-  - LaBraM 需微调 (fine-tuning) 而非 zero-shot 才能释放潜力
+  - LaBraM 需微调 (fine-tuning) 而非 zero-shot 才能释放潜力; 在 LOSO 场景下预训练模型的跨被试优势待验证

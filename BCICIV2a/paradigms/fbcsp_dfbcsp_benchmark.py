@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from framework.data import load_subject_train_test
 from framework.constants import LABEL_TO_INT
 from framework.metrics import compute_kappa
-from framework.paths import get_result_group_dir
+from framework.paths import get_paradigm_result_dir
 from framework.runtime import prepare_runtime_environment
 from models.FBCSP import FilterBank, OVR_FBCSP_Ensemble
 from models.DFBCSP import OVR_DFBCSP_Ensemble
@@ -120,7 +120,7 @@ def run_dfbcsp_subject(subject_id: int) -> dict:
 
 def run_all_subjects(output_dir: Path | None = None) -> dict:
     if output_dir is None:
-        output_dir = get_result_group_dir("benchmark_fbcsp_dfbcsp")
+        output_dir = get_paradigm_result_dir("within_subject", "benchmark_fbcsp_dfbcsp")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     subject_ids = list(range(1, 10))
@@ -202,7 +202,7 @@ def run_all_subjects(output_dir: Path | None = None) -> dict:
 
 
 def build_config_from_namespace(args: object) -> FBCSPDFBCSPBenchmarkConfig:
-    output_dir = args.output_dir if args.output_dir is not None else get_result_group_dir("benchmark_fbcsp_dfbcsp")
+    output_dir = args.output_dir if args.output_dir is not None else get_paradigm_result_dir("within_subject", "benchmark_fbcsp_dfbcsp")
     return FBCSPDFBCSPBenchmarkConfig(
         subject_id=args.subject,
         output_dir=output_dir,

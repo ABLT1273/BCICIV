@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from framework.data import load_subject_epochs
 from framework.constants import LABEL_TO_INT
-from framework.paths import get_result_group_dir
+from framework.paths import get_paradigm_result_dir
 from framework.runtime import prepare_runtime_environment
 
 logging.basicConfig(
@@ -121,7 +121,7 @@ def run_eegnet(X_train, X_test, y_train, y_test) -> dict:
 
 def run_all(output_dir: Path | None = None):
     if output_dir is None:
-        output_dir = get_result_group_dir("benchmark_cross_session")
+        output_dir = get_paradigm_result_dir("within_subject", "benchmark_cross_session")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     evaluations = [

@@ -28,7 +28,7 @@ import numpy as np
 
 from framework.data import load_subject_train_test
 from framework.metrics import compute_accuracy_kappa
-from framework.paths import get_model_param_dir, get_result_group_dir
+from framework.paths import get_model_param_dir, get_paradigm_result_dir
 from framework.plotting import (
     plot_aggregate_metric_bar,
     plot_comparison_bar_subject_grid_from_data,
@@ -158,7 +158,7 @@ def export_all_subjects_metrics_csv(
 def build_config_from_namespace(args: object) -> NNModelsBenchmarkConfig:
     """把统一 CLI 参数转成当前范式的配置对象。"""
 
-    output_dir = args.output_dir if args.output_dir is not None else get_result_group_dir("benchmark_nn_models")
+    output_dir = args.output_dir if args.output_dir is not None else get_paradigm_result_dir("within_subject", "benchmark_nn_models")
     return NNModelsBenchmarkConfig(
         subject_id=args.subject,
         output_dir=output_dir,
@@ -455,7 +455,7 @@ def save_benchmark_results(
 def run_from_config(config: NNModelsBenchmarkConfig) -> dict[str, object]:
     """执行四模型基准并按被试保存结果。"""
 
-    output_dir = config.output_dir or get_result_group_dir("benchmark_nn_models")
+    output_dir = config.output_dir or get_paradigm_result_dir("within_subject", "benchmark_nn_models")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     subject_ids = list(range(1, 10)) if config.all_subjects else [config.subject_id]

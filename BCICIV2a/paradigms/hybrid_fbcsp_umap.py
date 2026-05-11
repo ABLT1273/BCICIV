@@ -9,7 +9,7 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 from framework.constants import INT_TO_LABEL, LABEL_TO_DISPLAY_NAME, LABEL_TO_INT
 from framework.data import load_subject_train_test, select_c3_c4_from_full_channels
-from framework.paths import get_result_group_dir
+from framework.paths import get_paradigm_result_dir
 from framework.plotting import plot_3d_embedding
 
 
@@ -372,7 +372,7 @@ def save_feature_package(
 def build_config_from_namespace(args: object) -> HybridReductionConfig:
     """把统一 CLI 参数转成当前范式的配置对象。"""
 
-    output_dir = args.output_dir if args.output_dir is not None else get_result_group_dir("dim_reduction_hybrid_fbcsp")
+    output_dir = args.output_dir if args.output_dir is not None else get_paradigm_result_dir("within_subject", "dim_reduction_hybrid_fbcsp")
     return HybridReductionConfig(
         subject_id=args.subject,
         output_dir=output_dir,
@@ -384,7 +384,7 @@ def build_config_from_namespace(args: object) -> HybridReductionConfig:
 def run_from_config(config: HybridReductionConfig) -> dict[str, object]:
     """执行混合特征 + UMAP 范式。"""
 
-    output_dir = config.output_dir or get_result_group_dir("dim_reduction_hybrid_fbcsp")
+    output_dir = config.output_dir or get_paradigm_result_dir("within_subject", "dim_reduction_hybrid_fbcsp")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("正在读取 BCICIV2a 被试的训练/测试数据...", flush=True)

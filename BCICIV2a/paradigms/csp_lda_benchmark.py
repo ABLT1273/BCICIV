@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from framework.data import load_subject_train_test
 from framework.metrics import compute_kappa
-from framework.paths import get_result_group_dir
+from framework.paths import get_paradigm_result_dir
 from framework.runtime import prepare_runtime_environment
 
 logging.basicConfig(
@@ -177,7 +177,7 @@ def run_all_subjects(
         subject_ids = list(range(1, 10))
 
     if output_dir is None:
-        output_dir = get_result_group_dir("benchmark_csp_lda")
+        output_dir = get_paradigm_result_dir("within_subject", "benchmark_csp_lda")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     results = []
@@ -240,7 +240,7 @@ def run_all_subjects(
 
 
 def build_config_from_namespace(args: object) -> CSPLDABenchmarkConfig:
-    output_dir = args.output_dir if args.output_dir is not None else get_result_group_dir("benchmark_csp_lda")
+    output_dir = args.output_dir if args.output_dir is not None else get_paradigm_result_dir("within_subject", "benchmark_csp_lda")
     return CSPLDABenchmarkConfig(
         subject_id=args.subject,
         output_dir=output_dir,

@@ -22,7 +22,6 @@ def get_paradigm_result_dir(paradigm: str, group_name: str) -> Path:
 
     Paradigms:
         within_subject  – T→E, train on session T, test on session E
-        cross_session   – E→T and T→T evaluations
         loso            – Leave-One-Subject-Out cross-subject
     """
     path = get_results_root() / paradigm / group_name
